@@ -41,22 +41,33 @@
       "enableInspector": false
     },
     "browser": {
-      "nativeBlockList": ["filesystem.*"]
+      "nativeBlockList": [
+        "filesystem.*"
+      ]
     },
     "cloud": {
       "url": "/resources/#cloud",
-      "nativeAllowList": ["app.*"]
+      "nativeAllowList": [
+        "app.*"
+      ]
     },
     "chrome": {
       "width": 800,
       "height": 500,
       "args": "--user-agent=\"Neutralinojs chrome mode\"",
-      "nativeBlockList": ["filesystem.*", "os.*"]
+      "nativeBlockList": [
+        "filesystem.*",
+        "os.*"
+      ]
     }
   },
   "buildScript": {
     "mac": {
-      "architecture": ["x64", "arm64", "universal"],
+      "architecture": [
+        "x64",
+        "arm64",
+        "universal"
+      ],
       "minimumOS": "10.13.0",
       "appName": "netio-local-management",
       "appBundleName": "netio-local-management",
@@ -64,12 +75,16 @@
       "appIcon": "resources/icons/icon.png"
     },
     "win": {
-      "architecture": ["x64"],
+      "architecture": [
+        "x64"
+      ],
       "appName": "netio-local-management",
       "appIcon": "resources/icons/icon.png"
     },
     "linux": {
-      "architecture": ["x64"],
+      "architecture": [
+        "x64"
+      ],
       "appName": "netio-local-management",
       "appIcon": "resources/icons/icon.png",
       "appPath": "/usr/share/netio-local-management",
@@ -81,7 +96,7 @@
     "binaryName": "netio-local-management",
     "extensionsPath": "/extensions/",
     "resourcesPath": "/react-src/build/",
-    "binaryVersion": "6.5.0",
+    "binaryVersion": "6.8.0",
     "clientVersion": "6.5.0",
     "frontendLibrary": {
       "patchFile": "react-src/index.html",

@@ -46,7 +46,7 @@ This method is working on Linux operating system.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/netio-local-management.git
+git clone https://github.com/netioproducts/netio-local-management.git
 cd netio-local-management
 ```
 
@@ -107,6 +107,23 @@ bun run build:linux
 bun run build:windows
 bun run build:darwin-x64
 bun run build:darwin-arm64
+```
+
+---
+
+## Creating single executables
+
+For this you have to have warp_packer installed.
+
+```bash
+wget -qO warp-packer "https://github.com/dgiagio/warp/releases/download/v0.3.0/linux-x64.warp-packer"
+```
+
+The `build_win_portable.sh` and `build_linux_portable.sh` scripts bundle builded binaries into `dist/`.
+
+```bash
+bun run build:linux-portable
+bun run build:win-portable
 ```
 
 ---

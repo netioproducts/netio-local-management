@@ -17,3 +17,6 @@ fi
 if [ $APP_ARCH = "armhf" ]; then
     find "${EXT_DIR}" -type f ! -name "be-linux-armhf" -delete
 fi
+
+# Make sure the main app binary is executable
+chmod +x "${APP_DST}/${APP_BINARY}-linux_${APP_ARCH}"

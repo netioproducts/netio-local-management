@@ -14,10 +14,11 @@ neutralino.js
 
 .github/
 .tmp/
-LICENSE
 
-*__pycache__/*
-*.pyc
-*venv/
-config.json
-runtime_db.py
+node_modules/
+
+be-darwin*
+be-linux*
+be-windows*
+
+warp-packer

@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Netio Local Management is a desktop application for managing Netio power devices on the local network.",
   "scripts": {
+    "prestart": "if [ ! -d bin ] || [ -z \"$(ls -A bin)\" ]; then bunx neu update || true; mkdir -p bin && unzip -o .tmp/binaries.zip -d bin; fi",
     "start": "neu run",
+    "prebuild": "bun run prestart",
     "build": "./build.sh",
     "build:linux-portable": "./build_linux_portable.sh",
     "build:win-portable": "./build_win_portable.sh"
