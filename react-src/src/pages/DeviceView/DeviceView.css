@@ -1,0 +1,57 @@
+.info-section {
+  background: var(--bs-dark, #1e1e1e);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.info-section .info-section {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  margin-top: 0.5rem;
+}
+
+.info-section-header {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--netio-green, #69b72b);
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.info-table {
+  margin: 0;
+}
+
+.info-table tr td {
+  padding: 0.3rem 0.5rem;
+  vertical-align: top;
+  border: none;
+}
+
+.info-table .info-key {
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 0.85em;
+  white-space: nowrap;
+  width: 1%;
+  padding-right: 1.5rem;
+}
+
+.info-table .info-value {
+  color: rgba(0, 0, 0, 0.9);
+  font-size: 0.9em;
+  word-break: break-word;
+}
+
+.info-array-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+
+.device-info-panel .badge {
+  font-weight: 500;
+  font-size: 0.82em;
+}

@@ -1,0 +1,14 @@
+{
+  "name": "netio-local-management",
+  "version": "1.0.0",
+  "description": "Netio Local Management is a desktop application for managing Netio power devices on the local network.",
+  "scripts": {
+    "start": "neu run",
+    "build": "./build.sh",
+    "build:linux-portable": "./build_linux_portable.sh",
+    "build:win-portable": "./build_win_portable.sh"
+  },
+  "dependencies": {
+    "@neutralinojs/neu": "^11.7.1"
+  }
+}

@@ -1,0 +1,37 @@
+.filter-bar {
+  padding: 1em 1em 0.5em 1em;
+  width: 100%;
+  border-bottom: 1px solid #ddd;
+  position: relative;
+  z-index: 10;
+}
+
+.anim-enter-left {
+  animation: slideFadeInLeft 0.2s ease-out forwards;
+}
+
+@keyframes slideFadeInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(0.5em); /* Starts slightly to the right */
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.anim-enter-right {
+  animation: slideFadeInRight 0.2s ease-out forwards;
+}
+
+@keyframes slideFadeInRight {
+  from {
+    opacity: 0;
+    transform: translateX(-0.5em); /* Starts slightly to the left */
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

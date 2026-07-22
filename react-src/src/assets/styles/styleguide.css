@@ -1,0 +1,53 @@
+:root {
+  --netio-green: #005f41;
+}
+
+@font-face {
+  font-family: HighlandGothicFLF;
+  src: url("../fonts/HighlandGothicFLF.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+}
+
+.netio-font {
+  font-family: HighlandGothicFLF, Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.btn-netio {
+  background-color: var(--netio-green) !important;
+  border-color: var(--netio-green) !important;
+  color: white !important;
+}
+
+.btn-netio:hover,
+.btn-netio:focus,
+.btn-netio:active,
+.btn-netio.active {
+  background-color: #004731 !important;
+  border-color: #004731 !important;
+  color: white !important;
+}
+
+.btn-outline-netio {
+  background-color: white !important;
+  border-color: var(--netio-green) !important;
+  color: var(--netio-green) !important;
+}
+
+.btn-outline-netio:hover,
+.btn-outline-netio:focus,
+.btn-outline-netio:active,
+.btn-outline-netio.active {
+  background-color: var(--netio-green) !important;
+  border-color: var(--netio-green) !important;
+  color: white !important;
+}
+
+.form-check-input:checked {
+  background-color: var(--netio-green) !important;
+  border-color: var(--netio-green) !important;
+}
+
+.form-check-input:focus {
+  box-shadow: 0 0 0 0.25rem rgba(0, 95, 65, 0.5) !important;
+}

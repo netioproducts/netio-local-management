@@ -1,0 +1,54 @@
+{
+  "name": "react-src",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@neutralinojs/lib": "^6.5.0",
+    "bootstrap": "^5.3.8",
+    "react": "^19.2.4",
+    "react-bootstrap": "^2.10.10",
+    "react-dom": "^19.2.4",
+    "react-icons": "5.6.0",
+    "react-router": "^7.13.2"
+  },
+  "scripts": {
+    "start": "bunx vite",
+    "build": "bunx tsc && bunx vite build",
+    "preview": "bunx vite preview"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "baseline-browser-mapping": "^2.10.10",
+    "eslint": "^10.1.0",
+    "prettier": "^3.8.1",
+    "prettier-eslint": "^16.4.2",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.2"
+  }
+}

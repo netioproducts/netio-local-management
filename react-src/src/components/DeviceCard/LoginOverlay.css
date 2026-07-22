@@ -1,0 +1,42 @@
+.login-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 80px;
+}
+
+.login-overlay-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.04);
+  border: 1px dashed #ccc;
+}
+
+.login-icon {
+  color: #888;
+}
+
+.login-label {
+  font-size: 0.85rem;
+  color: #888;
+  font-weight: 500;
+}
+
+.login-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.login-controls .user-select {
+  min-width: 140px;
+}
+
+.login-controls .login-btn {
+  white-space: nowrap;
+}

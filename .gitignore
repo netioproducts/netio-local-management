@@ -1,0 +1,23 @@
+# Developer tools' files
+.lite_workspace.lua
+
+# Neutralinojs binaries and builds
+/bin
+/dist
+
+# Neutralinojs client (minified)
+neutralino.js
+
+# Neutralinojs related files
+.storage
+*.log
+
+.github/
+.tmp/
+LICENSE
+
+*__pycache__/*
+*.pyc
+*venv/
+config.json
+runtime_db.py

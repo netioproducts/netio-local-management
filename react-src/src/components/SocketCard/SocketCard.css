@@ -1,0 +1,22 @@
+.socket-card {
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 8px;
+  background-color: #f9f9f9;
+  min-width: 15em;
+  text-align: center;
+}
+
+.socket-card .socket-switch .form-check-input {
+  height: 2em;
+  width: 3em !important;
+}
+
+.socket-card .socket-select {
+  text-align: start;
+}
+
+.socket-card .form-switch {
+  margin-top: -0.3em;
+}

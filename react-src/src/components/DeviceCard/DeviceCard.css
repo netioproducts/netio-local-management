@@ -1,0 +1,139 @@
+.socket-switch {
+  margin-top: 10px;
+}
+
+.sockets-container {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 1.5em;
+}
+
+.device-card {
+  width: 100%;
+  gap: 2em;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 8px;
+  background-color: #f9f9f9;
+  text-align: center;
+}
+
+.device-attributes {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+}
+
+.device-card .socket-switch .form-check-input {
+  height: 2em;
+  width: 3em !important;
+}
+
+.device-card .form-check-input:checked {
+  background-color: var(--netio-green);
+  border-color: var(--netio-green);
+}
+
+.device-card .form-check-input:focus {
+  box-shadow: 0 0 0 0.25rem rgba(0, 95, 65, 0.5);
+}
+
+.device-card .form-switch {
+  margin-top: -0.3em;
+}
+
+.device-card.faded > * {
+  opacity: 0.5;
+}
+
+.device-card-compact {
+  width: 100%;
+  gap: 1em;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 8px 16px;
+  margin: 4px 8px;
+  background-color: #f9f9f9;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.device-card-compact .device-attributes {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 1.5em;
+  text-align: left;
+  align-items: center;
+  flex: 1;
+}
+
+.device-card-compact .device-attributes span {
+  font-size: 0.9em;
+}
+
+.device-card-compact .sockets-container {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 1em;
+  align-items: center;
+}
+
+.device-card-compact .socket-switch {
+  margin-top: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.device-card-compact .socket-switch h5 {
+  margin: 0;
+  font-size: 1em;
+}
+
+.device-card-compact .socket-switch .status-indicator {
+  min-height: auto;
+  font-size: 0.9em;
+}
+
+.device-card-compact .form-switch {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.device-card-compact .socket-switch .form-check-input {
+  height: 1.5em;
+  width: 2.5em !important;
+}
+
+.compact-socket-state {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  font-size: 0.9em;
+  background-color: #eee;
+  padding: 2px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.2s;
+}
+
+.compact-socket-state:hover:not(.disabled):not(.pending) {
+  background-color: #ddd;
+}
+
+.compact-socket-state.disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.device-card-compact.faded > * {
+  opacity: 0.5;
+}
