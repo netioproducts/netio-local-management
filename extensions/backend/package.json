@@ -1,6 +1,7 @@
 {
   "name": "backend",
-  "version": "0.1.5",
+  "version": "1.0.0",
+  "private": true,
   "main": "dist/main.js",
   "scripts": {
     "test": "bun test",

@@ -1,6 +1,6 @@
 {
   "name": "react-src",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "dependencies": {
     "@neutralinojs/lib": "^6.5.0",
