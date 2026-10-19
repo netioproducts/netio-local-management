@@ -358,7 +358,7 @@ describe("ConfigService – consistency enforcement on load", () => {
     expect(svc.getDeviceGroups()[0].devices).toHaveLength(0);
   });
 
-  it("falls back to DEFAULT_CONFIG on malformed JSON", () => {
+  it("falls back to default config on malformed JSON without a backup", () => {
     const dataDir = path.join(tempDir, "netio-local-management");
     fs.mkdirSync(dataDir, { recursive: true });
     const configPath = path.join(dataDir, "config.json");
@@ -366,8 +366,8 @@ describe("ConfigService – consistency enforcement on load", () => {
 
     const svc = createService(tempDir);
     svc.init();
-    // Should use DEFAULT_CONFIG silently
-    expect(svc.getUsers()).toBeDefined();
+    expect(svc.getUsers()).toEqual(DEFAULT_CONFIG.users);
+    expect(svc.getDevices()).toHaveLength(0);
   });
 
   it("creates default config file when none exists", () => {
@@ -410,5 +410,202 @@ describe("ConfigService – consistency enforcement on load", () => {
     const reloadedRaw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(reloadedRaw.users[0].password).not.toBe("plainpass");
     expect(reloadedRaw.users[0].password.startsWith("enc.v1:")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ConfigService – safe writing and recovery of broken config files
+// ---------------------------------------------------------------------------
+describe("ConfigService – safe writing and recovery", () => {
+  let tempDir: string;
+  let dataDir: string;
+  let configPath: string;
+  let backupPath: string;
+
+  const readJson = (filePath: string) =>
+    JSON.parse(fs.readFileSync(filePath, "utf-8"));
+
+  const listDataDir = () => fs.readdirSync(dataDir);
+
+  /** Creates a service with a warning listener and loads the config */
+  const initService = () => {
+    const svc = createService(tempDir);
+    const warnings: string[] = [];
+    svc.warningBroadcast = (message) => warnings.push(message);
+    svc.init();
+    return { svc, warnings };
+  };
+
+  /** Writes a valid config with one device as both main file and backup */
+  const writeValidConfigs = (backupDeviceMac: string) => {
+    const svc = createService(tempDir);
+    svc.init();
+    svc.addOrUpdateDevice({ ...SAMPLE_DEVICE, macAddress: backupDeviceMac });
+    svc.addOrUpdateDevice({ ...SAMPLE_DEVICE, macAddress: "112233445566" });
+  };
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cfg-safe-test-"));
+    dataDir = path.join(tempDir, "netio-local-management");
+    configPath = path.join(dataDir, "config.json");
+    backupPath = `${configPath}.bak`;
+    fs.mkdirSync(dataDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("does not leave a temp file and keeps the previous version as backup", () => {
+    const { svc } = initService();
+    svc.addOrUpdateDevice(SAMPLE_DEVICE);
+
+    expect(listDataDir().some((f) => f.endsWith(".tmp"))).toBe(false);
+    expect(readJson(configPath).devices).toHaveLength(1);
+    expect(readJson(backupPath).devices).toHaveLength(0);
+  });
+
+  it("does not warn on a fresh installation", () => {
+    const { warnings } = initService();
+    expect(warnings).toHaveLength(0);
+    expect(fs.existsSync(configPath)).toBe(true);
+  });
+
+  it("moves a corrupted config aside and restores from backup", () => {
+    writeValidConfigs("aabbccddeeff");
+    fs.writeFileSync(configPath, "NOT VALID JSON", "utf-8");
+
+    const { svc, warnings } = initService();
+
+    // Backup contains the state before the last save (one device)
+    expect(svc.getDevices().map((d) => d.macAddress)).toEqual(["aabbccddeeff"]);
+    const corrupt = listDataDir().filter((f) =>
+      f.startsWith("config.json.corrupt-"),
+    );
+    expect(corrupt).toHaveLength(1);
+    expect(fs.readFileSync(path.join(dataDir, corrupt[0]), "utf-8")).toBe(
+      "NOT VALID JSON",
+    );
+    expect(fs.existsSync(configPath)).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(corrupt[0]);
+    expect(warnings[0]).toContain("restored from backup");
+  });
+
+  it("first save after restore does not overwrite the backup", () => {
+    writeValidConfigs("aabbccddeeff");
+    const backupBefore = fs.readFileSync(backupPath, "utf-8");
+    fs.writeFileSync(configPath, "NOT VALID JSON", "utf-8");
+
+    const { svc } = initService();
+    svc.addOrUpdateUser("Bob", "bob", "pw");
+
+    expect(fs.readFileSync(backupPath, "utf-8")).toBe(backupBefore);
+    expect(readJson(configPath).users.map((u: any) => u.name)).toContain("Bob");
+  });
+
+  it("restores from backup when the main config is missing", () => {
+    writeValidConfigs("aabbccddeeff");
+    fs.rmSync(configPath);
+
+    const { svc, warnings } = initService();
+    expect(svc.getDevices()).toHaveLength(1);
+    expect(warnings[0]).toContain("is missing");
+    expect(warnings[0]).toContain("restored from backup");
+  });
+
+  it("starts with default config when both files are corrupted", () => {
+    fs.writeFileSync(configPath, "NOT VALID JSON", "utf-8");
+    fs.writeFileSync(backupPath, "ALSO BROKEN", "utf-8");
+
+    const { svc, warnings } = initService();
+
+    expect(svc.getUsers()).toEqual(DEFAULT_CONFIG.users);
+    expect(svc.getDevices()).toHaveLength(0);
+    // Broken backup is left in place
+    expect(fs.readFileSync(backupPath, "utf-8")).toBe("ALSO BROKEN");
+    expect(warnings[0]).toContain("could not be loaded either");
+  });
+
+  it("treats a missing top-level array as a corrupted file", () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ devices: [], users: [] }),
+      "utf-8",
+    );
+
+    const { warnings } = initService();
+    expect(
+      listDataDir().some((f) => f.startsWith("config.json.corrupt-")),
+    ).toBe(true);
+    expect(warnings[0]).toContain("No backup is available");
+  });
+
+  it("drops invalid entries, keeps the rest and reports them", () => {
+    const raw = {
+      devices: [
+        SAMPLE_DEVICE,
+        { macAddress: "112233445566", ipAddress: "not-an-ip" },
+      ],
+      deviceGroups: [
+        { name: "G", devices: ["aabbccddeeff", "zz"] },
+        { devices: [] },
+      ],
+      users: [SAMPLE_USER, { name: "", username: "x", password: "y" }],
+    };
+    fs.writeFileSync(configPath, JSON.stringify(raw), "utf-8");
+
+    const { svc, warnings } = initService();
+
+    expect(svc.getDevices().map((d) => d.macAddress)).toEqual(["aabbccddeeff"]);
+    expect(svc.getUsers().map((u) => u.name)).toEqual(["Alice"]);
+    expect(svc.getDeviceGroups()).toEqual([
+      { name: "G", devices: ["aabbccddeeff"] },
+    ]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("devices[1].ipAddress");
+    expect(warnings[0]).toContain("deviceGroups[0].devices[1]");
+    expect(warnings[0]).toContain("deviceGroups[1].name");
+    expect(warnings[0]).toContain("users[1].name");
+    // The file is not renamed, only the invalid entries are ignored
+    expect(
+      listDataDir().some((f) => f.startsWith("config.json.corrupt-")),
+    ).toBe(false);
+  });
+
+  it("blocks saving when the config file cannot be read", () => {
+    // A directory in place of the file makes reading fail with EISDIR
+    fs.mkdirSync(configPath);
+
+    const { svc, warnings } = initService();
+
+    expect(warnings[0]).toContain("could not be read");
+    expect(() => svc.addOrUpdateDevice(SAMPLE_DEVICE)).toThrow(
+      "Saving configuration is disabled",
+    );
+    expect(fs.statSync(configPath).isDirectory()).toBe(true);
+  });
+
+  it("throws when the config cannot be written and keeps the file intact", () => {
+    const { svc } = initService();
+    const before = fs.readFileSync(configPath, "utf-8");
+    // A directory in place of the temp file makes writing fail
+    fs.mkdirSync(`${configPath}.tmp`);
+
+    expect(() => svc.addOrUpdateDevice(SAMPLE_DEVICE)).toThrow(
+      "Error saving configuration",
+    );
+    expect(fs.readFileSync(configPath, "utf-8")).toBe(before);
+  });
+
+  it("does not mutate DEFAULT_CONFIG", () => {
+    const snapshot = structuredClone(DEFAULT_CONFIG);
+    fs.writeFileSync(configPath, "NOT VALID JSON", "utf-8");
+
+    const { svc } = initService();
+    svc.addOrUpdateUser("Bob", "bob", "pw");
+    svc.addOrUpdateDevice(SAMPLE_DEVICE);
+
+    expect(DEFAULT_CONFIG).toEqual(snapshot);
   });
 });

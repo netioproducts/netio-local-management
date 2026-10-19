@@ -5,15 +5,22 @@ import * as path from "path";
 import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
 import {
   AppConfig,
-  DEFAULT_CONFIG,
   Device,
   DeviceGroup,
   AppConfigSchema,
   User,
+  createDefaultConfig,
+  parseAppConfig,
 } from "./ConfigModel";
 
+type ConfigFileResult =
+  | { status: "ok"; config: AppConfig; issues: string[] }
+  | { status: "missing" }
+  | { status: "unreadable"; error: unknown }
+  | { status: "corrupt"; error: unknown };
+
 export class ConfigService {
-  private _errorBroadcast?: (message: string) => void;
+  private _warningBroadcast?: (message: string) => void;
 
   private static readonly PASSWORD_ENCRYPTION_PREFIX = "enc.v1";
   private static readonly HARD_CODED_CREDENTIALS_KEY_B64 =
@@ -23,11 +30,17 @@ export class ConfigService {
 
   private config: AppConfig;
   private configPath: string;
+  private backupPath: string;
+  private tempPath: string;
   private credentialsKey?: Buffer;
+  // Set when the config file exists but cannot be read, so it is never overwritten
+  private writeBlocked = false;
 
   public constructor(fileName: string = "data.json") {
     this.configPath = this.getStandardPath("netio-local-management", fileName);
-    this.config = DEFAULT_CONFIG;
+    this.backupPath = `${this.configPath}.bak`;
+    this.tempPath = `${this.configPath}.tmp`;
+    this.config = createDefaultConfig();
   }
 
   private getStandardPath(appName: string, fileName: string): string {
@@ -173,34 +186,132 @@ export class ConfigService {
 
   // Loading configuration from disk
   private load(): AppConfig {
-    if (!fs.existsSync(this.configPath)) {
+    const warnings: string[] = [];
+    const config = this.loadWithFallback(warnings);
+
+    if (warnings.length > 0) {
+      console.warn("Configuration warnings:\n" + warnings.join("\n"));
+      this._warningBroadcast?.(warnings.join("\n"));
+    }
+    return config;
+  }
+
+  private loadWithFallback(warnings: string[]): AppConfig {
+    const main = this.readConfigFile(this.configPath);
+    if (main.status === "ok") {
+      return this.prepareLoadedConfig(main.config, main.issues, warnings);
+    }
+
+    if (main.status === "missing" && !fs.existsSync(this.backupPath)) {
+      // Fresh installation, nothing to warn about
       console.log("Creating default configuration.");
-      this.saveInternal(DEFAULT_CONFIG);
-      return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); // Deep copy
+      const defaults = createDefaultConfig();
+      try {
+        this.saveInternal(defaults);
+      } catch (error) {
+        console.error("Error saving default configuration:", error);
+      }
+      return defaults;
+    }
+
+    if (main.status === "unreadable") {
+      console.error("Error reading configuration:", main.error);
+      this.writeBlocked = true;
+      warnings.push(
+        `Configuration file ${this.configPath} could not be read (${this.errorMessage(main.error)}). Saving is disabled until the application is restarted.`,
+      );
+    } else if (main.status === "corrupt") {
+      console.error("Configuration file is corrupted:", main.error);
+      warnings.push(this.moveCorruptFile(this.configPath));
+    } else {
+      warnings.push(`Configuration file ${this.configPath} is missing.`);
+    }
+
+    // When is the main file not usable
+    const backup = this.readConfigFile(this.backupPath);
+    if (backup.status === "ok") {
+      warnings.push(`Configuration was restored from backup ${this.backupPath}.`);
+      return this.prepareLoadedConfig(backup.config, backup.issues, warnings);
+    }
+
+    warnings.push(
+      backup.status === "missing"
+        ? "No backup is available. Starting with the default configuration."
+        : `Backup ${this.backupPath} could not be loaded either. Starting with the default configuration.`,
+    );
+    return createDefaultConfig();
+  }
+
+  private readConfigFile(filePath: string): ConfigFileResult {
+    if (!fs.existsSync(filePath)) {
+      return { status: "missing" };
+    }
+
+    let rawData: string;
+    try {
+      rawData = fs.readFileSync(filePath, "utf-8");
+    } catch (error) {
+      return { status: "unreadable", error };
     }
 
     try {
-      const rawData = fs.readFileSync(this.configPath, "utf-8");
-      const parsed = JSON.parse(rawData);
-      const validated = AppConfigSchema.parse(parsed);
-      const consistent = this.consistencyMaker(validated);
-      const deserialized = this.deserializeConfigFromDisk(consistent);
-
-      const hasPlaintextPasswords = consistent.users.some(
-        (user) => !this.isEncryptedPassword(user.password),
-      );
-      if (hasPlaintextPasswords) {
-        this.saveInternal(deserialized);
-      }
-
-      console.log("Configuration loaded.");
-
-      return deserialized;
+      const { config, issues } = parseAppConfig(JSON.parse(rawData));
+      return { status: "ok", config, issues };
     } catch (error) {
-      console.error("Error loading configuration:", error);
-      this._errorBroadcast?.("Error loading configuration. Using empty.");
-      return DEFAULT_CONFIG;
+      return { status: "corrupt", error };
     }
+  }
+
+  /**
+   * Moves a corrupted config file aside so it is not overwritten by the next save.
+   * Returns a warning message for the user.
+   */
+  private moveCorruptFile(filePath: string): string {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const corruptPath = `${filePath}.corrupt-${timestamp}`;
+    try {
+      fs.renameSync(filePath, corruptPath);
+      return `Configuration file ${filePath} is corrupted and was moved to ${corruptPath}.`;
+    } catch (error) {
+      console.error("Error moving corrupted configuration:", error);
+      this.writeBlocked = true;
+      return `Configuration file ${filePath} is corrupted and could not be moved aside (${this.errorMessage(error)}). Saving is disabled until the application is restarted.`;
+    }
+  }
+
+  private prepareLoadedConfig(
+    config: AppConfig,
+    issues: string[],
+    warnings: string[],
+  ): AppConfig {
+    if (issues.length > 0) {
+      warnings.push(
+        "Some entries in the configuration are invalid and were ignored. " +
+          "They will be removed from the file the next time the configuration is saved:\n" +
+          issues.map((issue) => `- ${issue}`).join("\n"),
+      );
+    }
+
+    const consistent = this.consistencyMaker(config);
+    const deserialized = this.deserializeConfigFromDisk(consistent);
+
+    const hasPlaintextPasswords = consistent.users.some(
+      (user) => !this.isEncryptedPassword(user.password),
+    );
+    if (hasPlaintextPasswords && !this.writeBlocked) {
+      try {
+        this.saveInternal(deserialized);
+      } catch (error) {
+        console.error("Error saving migrated passwords:", error);
+      }
+    }
+
+    console.log("Configuration loaded.");
+    return deserialized;
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private consistencyMaker(config: AppConfig): AppConfig {
@@ -248,20 +359,43 @@ export class ConfigService {
     this.saveInternal(this.config);
   }
 
+  /**
+   * Writes the config atomically (temp file + fsync + rename) and keeps the previous
+   * version as a backup. Throws when the config cannot be saved.
+   */
   private saveInternal(data: AppConfig): void {
+    if (this.writeBlocked) {
+      throw new Error(
+        "Saving configuration is disabled because the configuration file could not be read at startup.",
+      );
+    }
+
     const validated = AppConfigSchema.parse(data);
-    const serialized = this.serializeConfigForDisk(validated);
+    const serialized = JSON.stringify(
+      this.serializeConfigForDisk(validated),
+      null,
+      4,
+    );
 
     try {
-      fs.writeFileSync(
-        this.configPath,
-        JSON.stringify(serialized, null, 4),
-        "utf-8",
-      );
+      if (fs.existsSync(this.configPath)) {
+        fs.copyFileSync(this.configPath, this.backupPath);
+      }
+
+      const fd = fs.openSync(this.tempPath, "w");
+      try {
+        fs.writeFileSync(fd, serialized, "utf-8");
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.renameSync(this.tempPath, this.configPath);
       console.log("Configuration saved.");
     } catch (error) {
       console.error("Error saving configuration:", error);
-      this._errorBroadcast?.("Error saving configuration.");
+      throw new Error(
+        `Error saving configuration: ${this.errorMessage(error)}`,
+      );
     }
   }
 
@@ -392,8 +526,8 @@ export class ConfigService {
     return this.config.deviceGroups;
   }
 
-  public set errorBroadcast(broadcastFn: (message: string) => void) {
-    console.debug("ConfigService: Setting error broadcast function.");
-    this._errorBroadcast = broadcastFn;
+  public set warningBroadcast(broadcastFn: (message: string) => void) {
+    console.debug("ConfigService: Setting warning broadcast function.");
+    this._warningBroadcast = broadcastFn;
   }
 }

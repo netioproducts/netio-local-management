@@ -9,6 +9,8 @@ import { DeviceControlService } from "./DeviceControlService";
 import { DeviceDiscoveryService } from "./DeviceDiscoveryService";
 
 export class DeviceService {
+  public errorBroadcast?: (message: string) => void;
+
   constructor(
     private configService: ConfigService,
     private deviceManager: DeviceManager,
@@ -18,8 +20,15 @@ export class DeviceService {
   ) {}
 
   private onConfigChange = (newConfig: Device) => {
-    this.configService.addOrUpdateDevice(newConfig);
-    console.debug("[DeviceService] Device config updated:", newConfig);
+    try {
+      this.configService.addOrUpdateDevice(newConfig);
+      console.debug("[DeviceService] Device config updated:", newConfig);
+    } catch (error) {
+      console.error("[DeviceService] Failed to save device config:", error);
+      this.errorBroadcast?.(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   };
 
   private onDevicesLoaded = (devices: RuntimeDevice[]) => {

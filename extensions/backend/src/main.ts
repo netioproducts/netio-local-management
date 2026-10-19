@@ -80,7 +80,9 @@ const routes = createRoutes(
 );
 transportService.registerRoutes(routes);
 
-configService.errorBroadcast =
+configService.warningBroadcast =
+  transportService.broadcastWarning.bind(transportService);
+deviceService.errorBroadcast =
   transportService.broadcastError.bind(transportService);
 configService.init();
 

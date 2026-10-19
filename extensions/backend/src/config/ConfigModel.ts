@@ -63,3 +63,84 @@ export const DEFAULT_CONFIG: AppConfig = {
     },
   ],
 };
+
+export function createDefaultConfig(): AppConfig {
+  return structuredClone(DEFAULT_CONFIG);
+}
+
+// --- Lenient parsing ---
+
+const RawAppConfigSchema = z.object({
+  devices: z.array(z.unknown()),
+  deviceGroups: z.array(z.unknown()),
+  users: z.array(z.unknown()),
+});
+
+const RawDeviceGroupSchema = z.object({
+  name: z.string(),
+  devices: z.array(z.unknown()),
+});
+
+export interface ParsedAppConfig {
+  config: AppConfig;
+  issues: string[]; // Human readable descriptions of dropped entries
+}
+
+function formatIssues(prefix: string, error: z.ZodError): string[] {
+  return error.issues.map((issue) => {
+    const path = issue.path
+      .map((segment) =>
+        typeof segment === "number" ? `[${segment}]` : `.${String(segment)}`,
+      )
+      .join("");
+    return `${prefix}${path}: ${issue.message}`;
+  });
+}
+
+function parseEntries<T>(
+  name: string,
+  entries: unknown[],
+  schema: z.ZodType<T>,
+  issues: string[],
+): T[] {
+  return entries.flatMap((entry, idx) => {
+    const result = schema.safeParse(entry);
+    if (!result.success) {
+      issues.push(...formatIssues(`${name}[${idx}]`, result.error));
+      return [];
+    }
+    return [result.data];
+  });
+}
+
+/**
+ * Parses configuration loaded from disk. Throws when the top-level structure is broken,
+ * invalid devices, users and groups are dropped, invalid MACs are dropped from groups.
+ */
+export function parseAppConfig(raw: unknown): ParsedAppConfig {
+  const parsed = RawAppConfigSchema.parse(raw);
+  const issues: string[] = [];
+
+  const devices = parseEntries("devices", parsed.devices, DeviceSchema, issues);
+  const users = parseEntries("users", parsed.users, UserSchema, issues);
+  const deviceGroups = parsed.deviceGroups.flatMap((entry, groupIdx) => {
+    const result = RawDeviceGroupSchema.safeParse(entry);
+    if (!result.success) {
+      issues.push(...formatIssues(`deviceGroups[${groupIdx}]`, result.error));
+      return [];
+    }
+    return [
+      {
+        name: result.data.name,
+        devices: parseEntries(
+          `deviceGroups[${groupIdx}].devices`,
+          result.data.devices,
+          MACAddressRegex,
+          issues,
+        ),
+      },
+    ];
+  });
+
+  return { config: { devices, deviceGroups, users }, issues };
+}

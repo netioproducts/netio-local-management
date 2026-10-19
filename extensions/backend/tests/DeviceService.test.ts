@@ -359,3 +359,59 @@ describe("DeviceService logic – socket control guards", () => {
     expect(manager.getDevice(mac)).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// DeviceService – failed config save during device communication
+// ---------------------------------------------------------------------------
+describe("DeviceService – config save failure", () => {
+  it("keeps the device online when saving its config fails", async () => {
+    const { DeviceService } = await import("../src/services/DeviceService");
+    const { EventEmitter } = await import("events");
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ds-save-test-"));
+    try {
+      const cfg = createConfigService(tempDir);
+      // A directory in place of the temp file makes every save fail
+      fs.mkdirSync(
+        path.join(tempDir, "netio-local-management", "data.json.tmp"),
+      );
+
+      const manager = new DeviceManager((() => {}) as any);
+      const svc = new DeviceService(cfg, manager, {} as any, {} as any, {} as any);
+      const errors: string[] = [];
+      svc.errorBroadcast = (message) => errors.push(message);
+
+      // Client whose sync reports a changed firmware, so config_change is emitted
+      const client = Object.assign(new EventEmitter(), {
+        initialize: async () => {},
+        disconnect: async () => {},
+        getSystemInfo: async () => ({
+          model: "NETIO4C",
+          serialNumber: "aabbccddeeff",
+          firmwareVersion: "9.9.9",
+          name: "Lab",
+          outputCount: 1,
+        }),
+        getOutputs: async () => [{ id: 1, name: "Out 1", state: true }],
+      });
+      const rd = new RuntimeDevice({
+        macAddress: "aabbccddeeff",
+        ipAddress: "192.168.1.10",
+        fwVersion: "1.0.0",
+      } as Device);
+      rd.setupCredentials("admin", "admin", () => client as any);
+      rd.on("config_change", (svc as any).onConfigChange);
+
+      await rd.syncState();
+
+      expect(rd.isOnline).toBe(true);
+      expect(rd.isLoggedIn).toBe(true);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(
+        errors.every((e) => e.includes("Error saving configuration")),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
