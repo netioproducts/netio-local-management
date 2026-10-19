@@ -31,6 +31,10 @@ class NotificationService {
   info(title: string, message: string) {
     this.emit({ type: "info", title, message });
   }
+
+  warning(title: string, message: string) {
+    this.emit({ type: "warning", title, message });
+  }
 }
 
 export const notify = new NotificationService();

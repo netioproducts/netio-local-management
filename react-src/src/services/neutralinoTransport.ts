@@ -59,6 +59,9 @@ const handleBackendEvent = (event: CustomEvent) => {
         detail.payload.error || "Unknown error from backend",
       );
     }
+    else if (detail.type === "backendWarning") {
+      notify.warning("Warning", detail.payload.message);
+    }
     eventService.emit(detail.type as EventKey, detail.payload);
   } else {
     console.warn("Unknown event format from backend:", detail);

@@ -141,4 +141,8 @@ export class TransportService {
   public broadcastError(errorMessage: string) {
     this.broadcast("backendError", { error: errorMessage });
   }
+
+  public broadcastWarning(message: string) {
+    this.broadcast("backendWarning", { message });
+  }
 }

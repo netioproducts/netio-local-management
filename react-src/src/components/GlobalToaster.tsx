@@ -45,14 +45,14 @@ export const GlobalToaster = () => {
           key={toast.id}
           onClose={() => removeToast(toast.id)}
           delay={5000}
-          autohide
+          autohide={toast.type !== 'warning'} // Warnings stay until closed by the user
           bg="white"
         >
           <Toast.Header className={`text-${getVariant(toast.type)}`}>
             <strong className="me-auto">{toast.title}</strong>
             <small>now</small>
           </Toast.Header>
-          <Toast.Body>{toast.message}</Toast.Body>
+          <Toast.Body style={{ whiteSpace: 'pre-line' }}>{toast.message}</Toast.Body>
         </Toast>
       ))}
     </ToastContainer>
