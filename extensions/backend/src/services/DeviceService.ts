@@ -82,6 +82,7 @@ export class DeviceService {
     userName: string,
   ): Promise<DeviceDTO> {
     const device = this.getDeviceRuntime(mac);
+    device.assertNotBusy();
     const user = this.getUser(userName);
 
     try {
@@ -123,6 +124,7 @@ export class DeviceService {
 
   public async logoutFromDevice(mac: string): Promise<DeviceDTO> {
     const device = this.getDeviceRuntime(mac);
+    device.assertNotBusy();
 
     this.deviceManager.setVisibleDevices([]);
     this.deviceEventService.clearOutputThrottler(mac);
@@ -144,9 +146,10 @@ export class DeviceService {
         .getAllDevices()
         .filter((d) => d.getConfig().user === user)
         .map(async (d) => {
-          return this.logoutFromDevice(d.getConfig().macAddress).then(() => {
-            return this.loginToDevice(d.getConfig().macAddress, user);
-          });
+          // Runs in background, so wait for a running exclusive operation instead of failing
+          await d.whenIdle();
+          await this.logoutFromDevice(d.getConfig().macAddress);
+          return this.loginToDevice(d.getConfig().macAddress, user);
         }),
     );
   }
@@ -158,7 +161,10 @@ export class DeviceService {
       this.deviceManager
         .getAllDevices()
         .filter((d) => d.getConfig().user === userName)
-        .map((d) => this.logoutFromDevice(d.getConfig().macAddress)),
+        .map(async (d) => {
+          await d.whenIdle();
+          return this.logoutFromDevice(d.getConfig().macAddress);
+        }),
     );
   }
 
@@ -204,6 +210,7 @@ export class DeviceService {
     ipAddress: string;
   }): Promise<DeviceDTO> {
     const device = this.getDeviceRuntime(deviceData.macAddress);
+    device.assertNotBusy();
 
     const config = device.getConfig();
     config.ipAddress = deviceData.ipAddress;
@@ -215,7 +222,7 @@ export class DeviceService {
   }
 
   public async removeDevice(macAddress: string): Promise<void> {
-    this.getDeviceRuntime(macAddress);
+    this.getDeviceRuntime(macAddress).assertNotBusy();
     await this.logoutFromDevice(macAddress);
     this.deviceManager.removeDevice(macAddress);
     this.configService.removeDevice(macAddress);
@@ -269,6 +276,7 @@ export class DeviceService {
 
   public async getDeviceDetails(mac: string): Promise<DeviceDTO | any> {
     const device = this.getDeviceRuntime(mac);
+    device.assertNotBusy();
     const info = await device.getAllInfo();
     return info || device.toDTO();
   }

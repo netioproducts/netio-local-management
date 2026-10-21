@@ -43,6 +43,7 @@ export class DeviceControlService {
     newState?: boolean,
   ): Promise<DeviceDTO> {
     const device = this.getDeviceRuntime(mac);
+    device.assertNotBusy();
     if (!device.isOnline) {
       throw new Error(`Device ${mac} is not online. Cannot control sockets.`);
     }
@@ -62,6 +63,7 @@ export class DeviceControlService {
   ): Promise<DeviceDTO> {
     const [deviceMac, socketIndex] = socketId;
     const device = this.getDeviceRuntime(deviceMac);
+    device.assertNotBusy();
     if (!device.isOnline) {
       throw new Error(
         `Device ${deviceMac} is not online. Cannot control sockets.`,
@@ -93,7 +95,8 @@ export class DeviceControlService {
       .getAllDevices()
       .filter((device) =>
         normalizedMacs.includes(device.getConfig().macAddress),
-      );
+      )
+      .filter((device) => !device.isBusy);
 
     return Promise.allSettled(
       devicesToLocate.map((device) => device.locateDevice()),

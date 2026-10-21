@@ -12,7 +12,7 @@
  * to. Every method under test is a thin delegation, so covering the
  * collaborators achieves the same coverage without the transport coupling.
  */
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { DeviceManager } from "../src/services/DeviceManager";
 import { ConfigService } from "../src/config/ConfigService";
 import { RuntimeDevice } from "../src/netio-api/services/RuntimeDevice";
@@ -413,5 +413,134 @@ describe("DeviceService – config save failure", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Device services – operations on a busy (locked) device
+// ---------------------------------------------------------------------------
+describe("Device services – busy device", () => {
+  const MAC = "aabbccddeeff";
+  let tempDir: string;
+  let cfg: ConfigService;
+  let manager: DeviceManager;
+  let factoryCalls: number;
+  let deviceService: any;
+  let controlService: any;
+
+  const addDevice = (mac: string, client: any) => {
+    const dev = new RuntimeDevice({
+      macAddress: mac,
+      ipAddress: "192.168.1.10",
+      user: "Default",
+    } as Device);
+    dev.setupCredentials("admin", "admin", () => client);
+    dev.isOnline = true;
+    (manager as any).devices.set(mac, dev);
+    return dev;
+  };
+
+  /** Starts an exclusive operation which runs until release() is called */
+  const holdLock = (dev: RuntimeDevice) => {
+    let release!: () => void;
+    const done = dev.runExclusive(
+      "test operation",
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    return { release: () => release(), done };
+  };
+
+  beforeEach(async () => {
+    const { DeviceService } = await import("../src/services/DeviceService");
+    const { DeviceControlService } = await import(
+      "../src/services/DeviceControlService"
+    );
+    const { makeFakeClient } = await import("./helpers/fakeDeviceClient");
+
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ds-busy-test-"));
+    cfg = createConfigService(tempDir);
+    factoryCalls = 0;
+    manager = new DeviceManager((() => {
+      factoryCalls++;
+      return makeFakeClient();
+    }) as any);
+    const eventService = {
+      clearOutputThrottler: () => {},
+      onOutputChange: () => {},
+    };
+    controlService = new DeviceControlService(manager, eventService as any);
+    deviceService = new DeviceService(
+      cfg,
+      manager,
+      eventService as any,
+      controlService,
+      {} as any,
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects direct operations on a busy device", async () => {
+    const { makeFakeClient } = await import("./helpers/fakeDeviceClient");
+    const { DeviceBusyError } = await import("../src/netio-api/types/Errors");
+    const dev = addDevice(MAC, makeFakeClient());
+    const lock = holdLock(dev);
+
+    const operations = [
+      () => controlService.controlSocket([MAC, 1], true),
+      () => controlService.controlDeviceSockets(MAC, true),
+      () => deviceService.loginToDevice(MAC, "Default"),
+      () => deviceService.logoutFromDevice(MAC),
+      () => deviceService.changeDeviceUser(MAC, "Default"),
+      () => deviceService.removeDevice(MAC),
+      () => deviceService.updateDevice({ macAddress: MAC, ipAddress: "10.0.0.1" }),
+      () => deviceService.getDeviceDetails(MAC),
+    ];
+    for (const operation of operations) {
+      await expect(operation()).rejects.toThrow(DeviceBusyError);
+    }
+    expect(dev.isLoggedIn).toBe(false);
+    expect(manager.getDevice(MAC)).toBe(dev);
+
+    // Renaming touches only the app config
+    await deviceService.updateDeviceName(MAC, "Renamed");
+    expect(dev.getConfig().name).toBe("Renamed");
+
+    lock.release();
+    await lock.done;
+  });
+
+  it("locateDevices skips busy devices", async () => {
+    const { makeFakeClient } = await import("./helpers/fakeDeviceClient");
+    const busyClient = makeFakeClient();
+    const idleClient = makeFakeClient();
+    const busy = addDevice(MAC, busyClient);
+    addDevice("112233445566", idleClient);
+    const lock = holdLock(busy);
+
+    await controlService.locateDevices([MAC, "112233445566"]);
+    expect(busyClient.calls.locateDevice).toBe(0);
+    expect(idleClient.calls.locateDevice).toBe(1);
+
+    lock.release();
+    await lock.done;
+  });
+
+  it("credential update waits until the device is unlocked", async () => {
+    const { makeFakeClient } = await import("./helpers/fakeDeviceClient");
+    const dev = addDevice(MAC, makeFakeClient());
+    const lock = holdLock(dev);
+
+    const updating = deviceService.updateCredentialsForUser("Default");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(factoryCalls).toBe(0);
+
+    lock.release();
+    await lock.done;
+    await updating;
+    expect(factoryCalls).toBe(1);
+    expect(dev.isLoggedIn).toBe(true);
   });
 });

@@ -26,6 +26,7 @@ import {
 import { Device } from "../src/netio-api/types/Device";
 import {
   ClientNotInitializedError,
+  DeviceBusyError,
   MacAddressMismatchError,
   UnauthorizedError,
 } from "../src/netio-api/types/Errors";
@@ -34,6 +35,7 @@ import * as universal from "../src/netio-api/transport/univarsal";
 // Now import RuntimeDevice
 import { RuntimeDevice } from "../src/netio-api/services/RuntimeDevice";
 import { ESPDevice } from "../src/netio-api/devices/ESPDevice";
+import { makeFakeClient } from "./helpers/fakeDeviceClient";
 
 // ---------------------------------------------------------------------------
 // Mock client stub factory
@@ -719,5 +721,113 @@ describe("RuntimeDevice – getClient", () => {
     dev.setupCredentials("u", "p", clientFactory);
     const client = dev.getClient();
     expect(client).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// exclusive operations (device lock)
+// ---------------------------------------------------------------------------
+describe("RuntimeDevice – exclusive operations", () => {
+  const makeLoggedDevice = () => {
+    const client = makeFakeClient();
+    const dev = new RuntimeDevice(makeDevice());
+    dev.setupCredentials("admin", "admin", () => client as any);
+    return { dev, client };
+  };
+
+  /** Starts an exclusive operation which runs until release() is called */
+  const holdLock = (dev: RuntimeDevice) => {
+    let release!: () => void;
+    const done = dev.runExclusive(
+      "test operation",
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    return { release: () => release(), done };
+  };
+
+  it("unlocks the device when the operation throws", async () => {
+    const { dev } = makeLoggedDevice();
+    await expect(
+      dev.runExclusive("failing", async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(dev.isBusy).toBe(false);
+  });
+
+  it("rejects a concurrent exclusive operation", async () => {
+    const { dev } = makeLoggedDevice();
+    const lock = holdLock(dev);
+
+    expect(dev.isBusy).toBe(true);
+    await expect(dev.runExclusive("second", async () => {})).rejects.toThrow(
+      DeviceBusyError,
+    );
+    expect(() => dev.assertNotBusy()).toThrow("test operation");
+
+    lock.release();
+    await lock.done;
+    expect(dev.isBusy).toBe(false);
+  });
+
+  it("whenIdle resolves only after the device is unlocked", async () => {
+    const { dev } = makeLoggedDevice();
+    await dev.whenIdle(); // resolves immediately when not busy
+
+    const lock = holdLock(dev);
+    let idle = false;
+    const waiting = dev.whenIdle().then(() => (idle = true));
+    await Promise.resolve();
+    expect(idle).toBe(false);
+
+    lock.release();
+    await lock.done;
+    await waiting;
+    expect(idle).toBe(true);
+  });
+
+  it("defers enablePolling until the device is unlocked", async () => {
+    const { dev, client } = makeLoggedDevice();
+    const lock = holdLock(dev);
+
+    dev.enablePolling();
+    expect(dev.isPollingEnabled).toBe(true);
+    expect(client.calls.startAskingStatus).toBe(0);
+
+    lock.release();
+    await lock.done;
+    expect(client.calls.startAskingStatus).toBe(1);
+  });
+
+  it("skips outside syncState while locked, session sync still works", async () => {
+    const { dev, client } = makeLoggedDevice();
+    let release!: () => void;
+    const done = dev.runExclusive("test operation", async (session) => {
+      await dev.syncState();
+      expect(client.calls.initialize).toBe(0);
+      await session.syncState();
+      expect(client.calls.initialize).toBe(1);
+      await new Promise<void>((resolve) => (release = resolve));
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await dev.syncState();
+    expect(client.calls.initialize).toBe(1);
+
+    release();
+    await done;
+    await dev.syncState();
+    expect(client.calls.initialize).toBe(2);
+  });
+
+  it("factoryReset runs exclusively", async () => {
+    const { dev } = makeLoggedDevice();
+    const lock = holdLock(dev);
+    await expect(dev.factoryReset()).rejects.toThrow(DeviceBusyError);
+    lock.release();
+    await lock.done;
+
+    await dev.factoryReset();
+    expect(dev.isBusy).toBe(false);
   });
 });

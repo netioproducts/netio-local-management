@@ -32,3 +32,10 @@ export class UnauthorizedError extends Error {
     this.name = "UnauthorizedError";
   }
 }
+
+export class DeviceBusyError extends Error {
+  constructor(message: string = "Device is busy") {
+    super(message);
+    this.name = "DeviceBusyError";
+  }
+}

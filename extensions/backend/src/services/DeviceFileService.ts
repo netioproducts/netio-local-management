@@ -3,7 +3,11 @@ import * as path from "path";
 import { DeviceManager } from "./DeviceManager";
 import { ConfigService } from "../config/ConfigService";
 import { TransportService } from "../transport/TransportService";
-import { RuntimeDevice } from "../netio-api/services/RuntimeDevice";
+import {
+  ExclusiveSession,
+  RuntimeDevice,
+} from "../netio-api/services/RuntimeDevice";
+import { DeviceOfflineError, UnauthorizedError } from "../netio-api/types/Errors";
 import { DeviceDTO } from "../types/DTOs";
 
 export class DeviceFileService {
@@ -29,6 +33,23 @@ export class DeviceFileService {
     return device;
   }
 
+  /**
+   * Syncs the device inside an exclusive operation and checks it can be operated.
+   */
+  private async ensureDeviceReady(
+    device: RuntimeDevice,
+    session: ExclusiveSession,
+    mac: string,
+  ): Promise<void> {
+    await session.syncState();
+    if (!device.isOnline) {
+      throw new DeviceOfflineError(`Device ${mac} is offline.`);
+    }
+    if (!device.isLoggedIn) {
+      throw new UnauthorizedError(`Wrong credentials for device ${mac}.`);
+    }
+  }
+
   public async uploadFirmware(
     mac: string,
     filePath: string,
@@ -50,65 +71,59 @@ export class DeviceFileService {
       });
     };
 
-    device.lockConnection();
-    await device.syncState();
-    if (!device.isLoggedIn) {
-      throw new Error(
-        `Device ${mac} is not logged in. Cannot upload firmware.`,
-      );
-    }
-    const fwBefore = device.getConfig().fwVersion;
+    await device.runExclusive("firmware update", async (session) => {
+      try {
+        await this.ensureDeviceReady(device, session, mac);
+        const fwBefore = device.getConfig().fwVersion;
 
-    try {
-      await client.updateFirmware(firmwareBuffer, onProgress);
+        await client.updateFirmware(firmwareBuffer, onProgress);
 
-      for (let i = 0; i < DeviceFileService.MAX_REBOOT_RETRIES; i++) {
-        console.debug(
-          `[${mac}] Waiting for device to come back online... (${i + 1}/${DeviceFileService.MAX_REBOOT_RETRIES})`,
-        );
-        onProgress(
-          80 +
-            Math.floor(((i + 1) / DeviceFileService.MAX_REBOOT_RETRIES) * 20),
-          "Checking...",
-        );
-        await new Promise((res) =>
-          setTimeout(res, DeviceFileService.REBOOT_POLL_INTERVAL_MS),
-        );
+        for (let i = 0; i < DeviceFileService.MAX_REBOOT_RETRIES; i++) {
+          console.debug(
+            `[${mac}] Waiting for device to come back online... (${i + 1}/${DeviceFileService.MAX_REBOOT_RETRIES})`,
+          );
+          onProgress(
+            80 +
+              Math.floor(((i + 1) / DeviceFileService.MAX_REBOOT_RETRIES) * 20),
+            "Checking...",
+          );
+          await new Promise((res) =>
+            setTimeout(res, DeviceFileService.REBOOT_POLL_INTERVAL_MS),
+          );
 
-        const timeout = await client.checkConnectivity(1);
-        if (timeout !== -1) {
-          await device.syncState();
-          if (device.getConfig().fwVersion !== fwBefore) {
-            onProgress(100, "Completed");
+          const timeout = await client.checkConnectivity(1);
+          if (timeout !== -1) {
+            await session.syncState();
+            if (device.getConfig().fwVersion !== fwBefore) {
+              onProgress(100, "Completed");
 
-            // Reinitialize client connection as protocol might have changed (HTTP vs WS)
-            await client.reconnect();
+              // Reinitialize client connection as protocol might have changed (HTTP vs WS)
+              await client.reconnect();
 
-            console.log(`[${mac}] Firmware updated successfully.`);
-            break;
-          } else if (
-            device.isOnline === true &&
-            i >= DeviceFileService.MAX_REBOOT_RETRIES * 0.3
-          ) {
-            throw new Error(
-              "Device is back online but firmware version did not change.",
-            );
+              console.log(`[${mac}] Firmware updated successfully.`);
+              break;
+            } else if (
+              device.isOnline === true &&
+              i >= DeviceFileService.MAX_REBOOT_RETRIES * 0.3
+            ) {
+              throw new Error(
+                "Device is back online but firmware version did not change.",
+              );
+            }
           }
         }
-      }
 
-      if (device.isOnline === false) {
-        throw new Error(
-          `Device did not come back online after firmware update after ${(DeviceFileService.MAX_REBOOT_RETRIES * DeviceFileService.REBOOT_POLL_INTERVAL_MS) / 1000} seconds.`,
-        );
+        if (device.isOnline === false) {
+          throw new Error(
+            `Device did not come back online after firmware update after ${(DeviceFileService.MAX_REBOOT_RETRIES * DeviceFileService.REBOOT_POLL_INTERVAL_MS) / 1000} seconds.`,
+          );
+        }
+      } catch (error) {
+        onProgress(99, "Failed");
+        console.error(`[${mac}] Failed update the firmware:`, error);
+        throw error;
       }
-    } catch (error) {
-      onProgress(99, "Failed");
-      console.error(`[${mac}] Failed update the firmware:`, error);
-      throw error;
-    } finally {
-      device.unlockConnection();
-    }
+    });
 
     await device.syncState();
     return device.toDTO();
@@ -153,43 +168,41 @@ export class DeviceFileService {
       });
     };
 
-    device.lockConnection();
-    await device.syncState();
+    await device.runExclusive("configuration import", async (session) => {
+      try {
+        await this.ensureDeviceReady(device, session, mac);
+        await client.importConfig(configBuffer, onProgress);
 
-    try {
-      await client.importConfig(configBuffer, onProgress);
+        for (let i = 0; i < DeviceFileService.MAX_CONFIG_REBOOT_RETRIES; i++) {
+          console.debug(
+            `[${mac}] Waiting for device to come back online... (${i + 1}/${DeviceFileService.MAX_CONFIG_REBOOT_RETRIES})`,
+          );
+          onProgress(
+            80 +
+              Math.floor(
+                ((i + 1) / DeviceFileService.MAX_CONFIG_REBOOT_RETRIES) * 20,
+              ),
+            "Checking...",
+          );
+          await new Promise((res) =>
+            setTimeout(res, DeviceFileService.CONFIG_REBOOT_POLL_INTERVAL_MS),
+          );
 
-      for (let i = 0; i < DeviceFileService.MAX_CONFIG_REBOOT_RETRIES; i++) {
-        console.debug(
-          `[${mac}] Waiting for device to come back online... (${i + 1}/${DeviceFileService.MAX_CONFIG_REBOOT_RETRIES})`,
-        );
-        onProgress(
-          80 +
-            Math.floor(
-              ((i + 1) / DeviceFileService.MAX_CONFIG_REBOOT_RETRIES) * 20,
-            ),
-          "Checking...",
-        );
-        await new Promise((res) =>
-          setTimeout(res, DeviceFileService.CONFIG_REBOOT_POLL_INTERVAL_MS),
-        );
-
-        const timeout = await client.checkConnectivity(1);
-        if (timeout !== -1) {
-          await device.syncState();
-          console.log(`[${mac}] Device is back online after config import.`);
-          break;
+          const timeout = await client.checkConnectivity(1);
+          if (timeout !== -1) {
+            await session.syncState();
+            console.log(`[${mac}] Device is back online after config import.`);
+            break;
+          }
         }
+        onProgress(100, "Completed");
+        console.log(`[${mac}] Config imported successfully.`);
+      } catch (error) {
+        onProgress(99, "Failed");
+        console.error(`[${mac}] Failed to import config:`, error);
+        throw error;
       }
-      onProgress(100, "Completed");
-      console.log(`[${mac}] Config imported successfully.`);
-    } catch (error) {
-      onProgress(99, "Failed");
-      console.error(`[${mac}] Failed to import config:`, error);
-      throw error;
-    } finally {
-      device.unlockConnection();
-    }
+    });
 
     await device.syncState();
     return device.toDTO();
@@ -209,6 +222,7 @@ export class DeviceFileService {
 
   public async exportConfig(mac: string): Promise<string> {
     const device = this.getDeviceRuntime(mac);
+    device.assertNotBusy();
     const client = device.getClient();
 
     await device.syncState();

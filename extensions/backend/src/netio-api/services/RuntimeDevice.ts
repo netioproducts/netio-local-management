@@ -6,11 +6,19 @@ import { checkConnectivity } from "../transport/univarsal";
 import { Device } from "../types/Device";
 import {
   ClientNotInitializedError,
+  DeviceBusyError,
   DeviceOfflineError,
   UnauthorizedError,
 } from "../types/Errors";
 import { RuntimeSocket } from "../types/Runtime";
 import { IDeviceClient } from "../types/IDeviceClient";
+
+/**
+ * Access to the device granted to an exclusive operation while the device is locked.
+ */
+export interface ExclusiveSession {
+  syncState(): Promise<void>;
+}
 
 export class RuntimeDevice extends EventEmitter {
   private _config!: Device;
@@ -24,7 +32,8 @@ export class RuntimeDevice extends EventEmitter {
   public sockets: Record<number, RuntimeSocket> = {};
 
   private pollingEnabled: boolean = false;
-  private operationLock: boolean = false;
+  private busyOperation: string | null = null; // Name of the running exclusive operation
+  private idleWaiters: (() => void)[] = [];
   private idleTimeout?: NodeJS.Timeout; // Timeout for idle
   private static readonly IDLE_TIMEOUT_MS = 60000;
 
@@ -121,9 +130,46 @@ export class RuntimeDevice extends EventEmitter {
     }
   }
 
-  public lockConnection(): void {
-    if (this.operationLock) return;
-    this.operationLock = true;
+  public get isBusy(): boolean {
+    return this.busyOperation !== null;
+  }
+
+  public assertNotBusy(): void {
+    if (this.busyOperation) {
+      throw new DeviceBusyError(
+        `Device ${this._config.macAddress} is busy: ${this.busyOperation}.`,
+      );
+    }
+  }
+
+  /**
+   * Resolves when no exclusive operation is running on the device.
+   */
+  public whenIdle(): Promise<void> {
+    if (!this.busyOperation) return Promise.resolve();
+    return new Promise((resolve) => this.idleWaiters.push(resolve));
+  }
+
+  /**
+   * Runs an operation which needs the device for itself (firmware update, config import, ...).
+   * Polling and outside syncs are paused, the device is always unlocked afterwards.
+   * Throws DeviceBusyError when another exclusive operation is running.
+   */
+  public async runExclusive<T>(
+    operation: string,
+    fn: (session: ExclusiveSession) => Promise<T>,
+  ): Promise<T> {
+    this.assertNotBusy();
+    this.lockConnection(operation);
+    try {
+      return await fn({ syncState: () => this.performSyncState() });
+    } finally {
+      this.unlockConnection();
+    }
+  }
+
+  private lockConnection(operation: string): void {
+    this.busyOperation = operation;
 
     if (this.idleTimeout) {
       clearTimeout(this.idleTimeout);
@@ -138,9 +184,8 @@ export class RuntimeDevice extends EventEmitter {
       );
   }
 
-  public unlockConnection(): void {
-    if (!this.operationLock) return;
-    this.operationLock = false;
+  private unlockConnection(): void {
+    this.busyOperation = null;
 
     this.keepConnectionAlive();
     if (this.pollingEnabled) {
@@ -153,11 +198,17 @@ export class RuntimeDevice extends EventEmitter {
           ),
         );
     }
+
+    const waiters = this.idleWaiters;
+    this.idleWaiters = [];
+    waiters.forEach((resolve) => resolve());
   }
 
   public enablePolling(): void {
     if (this.pollingEnabled) return;
     this.pollingEnabled = true;
+    // Polling is started when the running exclusive operation unlocks the device
+    if (this.busyOperation) return;
 
     if (this.idleTimeout) {
       clearTimeout(this.idleTimeout);
@@ -240,7 +291,21 @@ export class RuntimeDevice extends EventEmitter {
     return this._config;
   }
 
+  /**
+   * Syncs state from the device. Skipped while an exclusive operation is running,
+   * the last known state is kept.
+   */
   public async syncState(): Promise<void> {
+    if (this.busyOperation) {
+      console.debug(
+        `[${this._config.macAddress}] Sync skipped, device is busy: ${this.busyOperation}.`,
+      );
+      return;
+    }
+    return this.performSyncState();
+  }
+
+  private async performSyncState(): Promise<void> {
     if (!this.client) return;
 
     try {
@@ -335,7 +400,7 @@ export class RuntimeDevice extends EventEmitter {
   }
 
   private keepConnectionAlive() {
-    if (this.operationLock) return;
+    if (this.busyOperation) return;
     if (this.pollingEnabled) return;
     if (!this.client) return;
 
@@ -427,8 +492,10 @@ export class RuntimeDevice extends EventEmitter {
 
   public async factoryReset(): Promise<void> {
     const client = this.getClient();
-    await client.factoryReset();
-    await client.disconnect();
+    await this.runExclusive("factory reset", async () => {
+      await client.factoryReset();
+      await client.disconnect();
+    });
   }
 
   public async locateDevice(): Promise<void> {
