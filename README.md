@@ -143,13 +143,77 @@ bun test
 
 On first launch the app creates a data file in the platform-standard data directory:
 
-| OS      | Path                                                               |
-| ------- | ------------------------------------------------------------------ |
-| Linux   | `~/.local/share/netio-local-management/config.json`                |
-| macOS   | `~/Library/Application Support/netio-local-management/config.json` |
-| Windows | `%LOCALAPPDATA%\netio-local-management\config.json`                |
+| OS      | Path                                                             |
+| ------- | ---------------------------------------------------------------- |
+| Linux   | `~/.local/share/netio-local-management/data.json`                |
+| macOS   | `~/Library/Application Support/netio-local-management/data.json` |
+| Windows | `%LOCALAPPDATA%\netio-local-management\data.json`                |
 
 Stored credentials are encrypted at rest using AES-256-GCM.
+
+---
+
+## Debugging
+
+### Log file
+
+The backend writes its log to `backend.log` next to `data.json` (see [Data storage](#data-storage)).
+The file has a single size limit of 5 MB. When it is exceeded, the older half is removed and the file
+starts with `--- log trimmed ---`. Every application start begins with a header line
+`===== Netio Local Management <version> started <time> =====` followed by the platform, paths and
+the active log level.
+
+Passwords, tokens and session IDs are always masked as `***`, even in debug mode, so the log can be
+sent for diagnostics.
+
+### Log levels
+
+| Level   | Contains                                                                             |
+| ------- | ------------------------------------------------------------------------------------ |
+| `error` | Failed operations with stack traces                                                  |
+| `warn`  | Recoverable problems and failed requests with their reason                           |
+| `info`  | User actions and state changes with results and durations (default)                 |
+| `debug` | Every request to the backend and to devices, WebSocket messages, polling, discovery |
+
+### Enabling debug mode
+
+The level is chosen at startup in this order:
+
+1. Environment variable `NETIO_DEBUG=1` sets `debug`.
+2. `settings.logLevel` in `data.json` (`error`, `warn`, `info` or `debug`):
+   ```json
+   {
+     "devices": [],
+     "deviceGroups": [],
+     "users": [],
+     "settings": { "logLevel": "debug" }
+   }
+   ```
+   Edit the file while the application is closed. The change takes effect on the next start.
+3. Default `info`.
+
+In debug mode the backend also prints the log to its standard output and the frontend prints its own
+log to the browser console. Frontend logs are never written to the file.
+
+```bash
+# Development
+NETIO_DEBUG=1 bun run start
+
+# Built application (Linux / macOS)
+NETIO_DEBUG=1 ./netio-local-management-linux_x64
+
+# Built application (Windows, PowerShell)
+$env:NETIO_DEBUG=1; .\netio-local-management.exe
+```
+
+### Developer tools in a built application
+
+The WebView inspector is disabled in the configuration. To open it in a built application, start it
+with `--window-enable-inspector=true`, for example together with debug mode:
+
+```bash
+NETIO_DEBUG=1 ./netio-local-management-linux_x64 --window-enable-inspector=true
+```
 
 ---
 
