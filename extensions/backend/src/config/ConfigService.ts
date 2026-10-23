@@ -13,6 +13,9 @@ import {
   createDefaultConfig,
   parseAppConfig,
 } from "./ConfigModel";
+import { createLogger } from "../logging/Logger";
+
+const log = createLogger("ConfigService");
 
 type ConfigFileResult =
   | { status: "ok"; config: AppConfig; issues: string[] }
@@ -160,7 +163,7 @@ export class ConfigService {
         this.getHardcodedCredentialsKey(),
       );
     } catch (error) {
-      console.error("Failed to decrypt stored password.", error);
+      log.error("Failed to decrypt stored password", error);
       return password;
     }
   }
@@ -188,10 +191,19 @@ export class ConfigService {
   // Loading configuration from disk
   private load(): AppConfig {
     const warnings: string[] = [];
+    log.debug("Loading configuration", { path: this.configPath });
     const config = this.loadWithFallback(warnings);
 
+    log.info("Configuration loaded", {
+      path: this.configPath,
+      devices: config.devices.length,
+      users: config.users.length,
+      groups: config.deviceGroups.length,
+      warnings: warnings.length,
+      saveDisabled: this.writeBlocked,
+    });
     if (warnings.length > 0) {
-      console.warn("Configuration warnings:\n" + warnings.join("\n"));
+      log.warn("Configuration loaded with warnings", { warnings });
       this._warningBroadcast?.(warnings.join("\n"));
     }
     return config;
@@ -205,36 +217,61 @@ export class ConfigService {
 
     if (main.status === "missing" && !fs.existsSync(this.backupPath)) {
       // Fresh installation, nothing to warn about
-      console.log("Creating default configuration.");
+      log.info("No configuration found, creating default configuration", {
+        path: this.configPath,
+      });
       const defaults = createDefaultConfig();
       try {
         this.saveInternal(defaults);
       } catch (error) {
-        console.error("Error saving default configuration:", error);
+        log.error("Failed to save default configuration", error);
       }
       return defaults;
     }
 
     if (main.status === "unreadable") {
-      console.error("Error reading configuration:", main.error);
+      log.error(
+        `Configuration file ${this.configPath} could not be read, saving is disabled`,
+        main.error,
+      );
       this.writeBlocked = true;
       warnings.push(
         `Configuration file ${this.configPath} could not be read (${this.errorMessage(main.error)}). Saving is disabled until the application is restarted.`,
       );
     } else if (main.status === "corrupt") {
-      console.error("Configuration file is corrupted:", main.error);
+      log.error(
+        `Configuration file ${this.configPath} is corrupted`,
+        main.error,
+      );
       warnings.push(this.moveCorruptFile(this.configPath));
     } else {
+      log.warn("Configuration file is missing, trying backup", {
+        path: this.configPath,
+        backupPath: this.backupPath,
+      });
       warnings.push(`Configuration file ${this.configPath} is missing.`);
     }
 
     // When is the main file not usable
     const backup = this.readConfigFile(this.backupPath);
     if (backup.status === "ok") {
+      log.warn("Configuration restored from backup", {
+        backupPath: this.backupPath,
+      });
       warnings.push(`Configuration was restored from backup ${this.backupPath}.`);
       return this.prepareLoadedConfig(backup.config, backup.issues, warnings);
     }
 
+    if (backup.status === "missing") {
+      log.warn("No configuration backup available, starting with default configuration", {
+        backupPath: this.backupPath,
+      });
+    } else {
+      log.error(
+        `Configuration backup ${this.backupPath} could not be loaded (${backup.status}), starting with default configuration`,
+        backup.error,
+      );
+    }
     warnings.push(
       backup.status === "missing"
         ? "No backup is available. Starting with the default configuration."
@@ -272,9 +309,16 @@ export class ConfigService {
     const corruptPath = `${filePath}.corrupt-${timestamp}`;
     try {
       fs.renameSync(filePath, corruptPath);
+      log.warn("Corrupted configuration file moved aside", {
+        path: filePath,
+        movedTo: corruptPath,
+      });
       return `Configuration file ${filePath} is corrupted and was moved to ${corruptPath}.`;
     } catch (error) {
-      console.error("Error moving corrupted configuration:", error);
+      log.error(
+        `Failed to move corrupted configuration ${filePath} aside, saving is disabled`,
+        error,
+      );
       this.writeBlocked = true;
       return `Configuration file ${filePath} is corrupted and could not be moved aside (${this.errorMessage(error)}). Saving is disabled until the application is restarted.`;
     }
@@ -286,6 +330,7 @@ export class ConfigService {
     warnings: string[],
   ): AppConfig {
     if (issues.length > 0) {
+      log.warn("Invalid configuration entries ignored", { issues });
       warnings.push(
         "Some entries in the configuration are invalid and were ignored. " +
           "They will be removed from the file the next time the configuration is saved:\n" +
@@ -300,14 +345,14 @@ export class ConfigService {
       (user) => !this.isEncryptedPassword(user.password),
     );
     if (hasPlaintextPasswords && !this.writeBlocked) {
+      log.info("Encrypting plaintext passwords in configuration");
       try {
         this.saveInternal(deserialized);
       } catch (error) {
-        console.error("Error saving migrated passwords:", error);
+        log.error("Failed to save migrated passwords", error);
       }
     }
 
-    console.log("Configuration loaded.");
     return deserialized;
   }
 
@@ -319,16 +364,17 @@ export class ConfigService {
     const macSet = new Set<string>();
     const consistentDevices = config.devices.filter((device) => {
       if (macSet.has(device.macAddress)) {
-        console.warn(
-          `Duplicate MAC address found in config: ${device.macAddress}. Skipping this entry.`,
-        );
+        log.warn("Duplicate MAC address in configuration, entry dropped", {
+          mac: device.macAddress,
+        });
         return false;
       }
 
       if (device.user && !config.users.find((u) => u.name === device.user)) {
-        console.warn(
-          `Device with MAC ${device.macAddress} references non-existent user "${device.user}". Removing user reference from this device.`,
-        );
+        log.warn("Device references non-existent user, user reference removed", {
+          mac: device.macAddress,
+          user: device.user,
+        });
         device.user = undefined;
       }
       macSet.add(device.macAddress);
@@ -339,9 +385,10 @@ export class ConfigService {
       ...group,
       devices: group.devices.filter((mac) => {
         if (!macSet.has(mac)) {
-          console.warn(
-            `Device with MAC ${mac} in group "${group.name}" is not defined in config. Skipping this MAC in the group.`,
-          );
+          log.warn("Group references unknown device, MAC dropped from group", {
+            mac,
+            group: group.name,
+          });
           return false;
         }
         return true;
@@ -366,6 +413,9 @@ export class ConfigService {
    */
   private saveInternal(data: AppConfig): void {
     if (this.writeBlocked) {
+      log.warn("Configuration not saved, saving is disabled since startup", {
+        path: this.configPath,
+      });
       throw new Error(
         "Saving configuration is disabled because the configuration file could not be read at startup.",
       );
@@ -391,9 +441,9 @@ export class ConfigService {
         fs.closeSync(fd);
       }
       fs.renameSync(this.tempPath, this.configPath);
-      console.log("Configuration saved.");
+      log.debug("Configuration saved", { path: this.configPath });
     } catch (error) {
-      console.error("Error saving configuration:", error);
+      log.error(`Failed to save configuration ${this.configPath}`, error);
       throw new Error(
         `Error saving configuration: ${this.errorMessage(error)}`,
       );
@@ -532,7 +582,7 @@ export class ConfigService {
   }
 
   public set warningBroadcast(broadcastFn: (message: string) => void) {
-    console.debug("ConfigService: Setting warning broadcast function.");
+    log.debug("Warning broadcast function set");
     this._warningBroadcast = broadcastFn;
   }
 }

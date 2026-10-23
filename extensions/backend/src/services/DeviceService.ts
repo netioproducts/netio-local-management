@@ -8,6 +8,9 @@ import { RuntimeDevice } from "../netio-api/services/RuntimeDevice";
 import { DeviceEventService } from "./DeviceEventService";
 import { DeviceControlService } from "./DeviceControlService";
 import { DeviceDiscoveryService } from "./DeviceDiscoveryService";
+import { createLogger } from "../logging/Logger";
+
+const log = createLogger("DeviceService");
 
 export class DeviceService {
   public errorBroadcast?: (message: string, macAddress?: string) => void;
@@ -23,9 +26,20 @@ export class DeviceService {
   private onConfigChange = (newConfig: Device) => {
     try {
       this.configService.addOrUpdateDevice(newConfig);
-      console.debug("[DeviceService] Device config updated:", newConfig);
+      log.debug("Device config updated", {
+        mac: newConfig.macAddress,
+        ip: newConfig.ipAddress,
+        name: newConfig.name,
+        model: newConfig.model,
+        fwVersion: newConfig.fwVersion,
+        user: newConfig.user,
+        sockets: newConfig.sockets,
+      });
     } catch (error) {
-      console.error("[DeviceService] Failed to save device config:", error);
+      log.error(
+        `Failed to save config of device ${newConfig.macAddress}`,
+        error,
+      );
       this.errorBroadcast?.(
         error instanceof Error ? error.message : String(error),
       );
@@ -50,6 +64,11 @@ export class DeviceService {
         device.getConfig().password,
       ];
       if (username !== undefined && password !== undefined) {
+        log.debug("Setting up stored credentials", {
+          mac: device.getConfig().macAddress,
+          ip: device.getConfig().ipAddress,
+          user: device.getConfig().user,
+        });
         device.setupCredentials(username, password, this.deviceManager.clientFactory);
       }
     });
@@ -60,7 +79,7 @@ export class DeviceService {
       DeviceManager.normalizeMac(mac),
     );
     if (!device) {
-      console.debug(`[DeviceService] Device with MAC ${mac} not found.`);
+      log.debug("Device not found", { mac });
       throw new Error(`Device with MAC ${mac} does not exist.`);
     }
     return device;
@@ -69,13 +88,16 @@ export class DeviceService {
   private getUser(name: string): User {
     const user = this.configService.getUser(name);
     if (!user) {
-      console.debug(`[DeviceService] User ${name} not found.`);
+      log.debug("User not found", { user: name });
       throw new Error(`User ${name} does not exist.`);
     }
     return user;
   }
 
   public start(): void {
+    log.info("Loading devices from configuration", {
+      count: this.configService.getDevices().length,
+    });
     this.deviceManager.loadFromConfig(
       this.configService.getDevices().map((d) => ({
         ...d,
@@ -93,6 +115,11 @@ export class DeviceService {
     const device = this.getDeviceRuntime(mac);
     device.assertNotBusy();
     const user = this.getUser(userName);
+    log.debug("Logging in to device", {
+      mac,
+      user: user.name,
+      ip: device.getConfig().ipAddress,
+    });
 
     try {
       await device.setupCredentials(user.username, user.password, this.deviceManager.clientFactory);
@@ -100,17 +127,24 @@ export class DeviceService {
       await device.syncState();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      log.warn("Login failed", { mac, user: user.name, reason });
       throw new Error(`Failed to login to device ${mac}: ${reason}`);
     }
 
     // syncState does not throw, it only records the result
     if (!device.isOnline) {
+      log.warn("Login failed", { mac, user: user.name, reason: "device offline" });
       throw new DeviceOfflineError(`Device ${mac} is offline.`);
     }
     if (!device.isLoggedIn) {
+      log.warn("Login failed", {
+        mac,
+        user: user.name,
+        reason: "wrong credentials",
+      });
       throw new UnauthorizedError(`Wrong credentials for device ${mac}.`);
     }
-    console.log(`[DeviceService] Login to device ${mac} successful.`);
+    log.info("Login successful", { mac, user: user.name });
     
     const info = await device.getClient().getSystemInfo();
     device.originalName = info.name;
@@ -130,6 +164,12 @@ export class DeviceService {
       },
       {} as any,
     );
+    log.debug("Device info loaded after login", {
+      mac,
+      name: info.name,
+      model: info.model,
+      sockets: socketInfos.length,
+    });
 
     device.getConfig().user = user.name;
     device.emit("config_change", device.getConfig());
@@ -148,17 +188,22 @@ export class DeviceService {
     delete config.user;
     device.emit("config_change", config);
 
-    console.log(`[DeviceService] Device ${mac} logged out.`);
+    log.info("Logged out", { mac });
     return device.toDTO();
   }
 
   public async updateCredentialsForUser(user: string): Promise<void> {
     this.getUser(user);
 
+    const devices = this.deviceManager
+      .getAllDevices()
+      .filter((d) => d.getConfig().user === user);
+    log.info("Updating credentials on devices of user", {
+      user,
+      devices: devices.length,
+    });
     await this.runInBackground(
-      this.deviceManager
-        .getAllDevices()
-        .filter((d) => d.getConfig().user === user),
+      devices,
       async (d) => {
         await this.logoutFromDevice(d.getConfig().macAddress);
         await this.loginToDevice(d.getConfig().macAddress, user);
@@ -169,10 +214,15 @@ export class DeviceService {
   public async clearCredentialsForUser(userName: string): Promise<void> {
     this.getUser(userName);
 
+    const devices = this.deviceManager
+      .getAllDevices()
+      .filter((d) => d.getConfig().user === userName);
+    log.info("Clearing credentials on devices of user", {
+      user: userName,
+      devices: devices.length,
+    });
     await this.runInBackground(
-      this.deviceManager
-        .getAllDevices()
-        .filter((d) => d.getConfig().user === userName),
+      devices,
       async (d) => {
         await this.logoutFromDevice(d.getConfig().macAddress);
       },
@@ -201,8 +251,8 @@ export class DeviceService {
         result.reason instanceof Error
           ? result.reason.message
           : String(result.reason);
-      console.error(
-        `[DeviceService] Background operation failed for ${config.macAddress}:`,
+      log.error(
+        `Background credentials update failed for device ${config.macAddress}`,
         result.reason,
       );
       this.errorBroadcast?.(
@@ -217,6 +267,7 @@ export class DeviceService {
     newUserName: string,
   ): Promise<DeviceDTO> {
     this.getUser(newUserName);
+    log.info("Changing device user", { mac, user: newUserName });
     await this.logoutFromDevice(mac);
     return await this.loginToDevice(mac, newUserName);
   }
@@ -224,6 +275,7 @@ export class DeviceService {
   public async createDevice(deviceData: {
     ipAddress: string;
   }): Promise<DeviceDTO> {
+    log.debug("Adding device", { ip: deviceData.ipAddress });
     try {
       const basicDeviceInfo = await getBasicDeviceInfo({
         host: deviceData.ipAddress,
@@ -236,15 +288,15 @@ export class DeviceService {
       };
 
       await this.deviceManager.loadFromDiscover([newDeviceConfig]);
-      console.log(
-        `[DeviceService] Added new device with IP ${deviceData.ipAddress}.`,
-      );
+      log.info("Device added", {
+        ip: deviceData.ipAddress,
+        mac: newDeviceConfig.mac,
+        fwVersion: newDeviceConfig.fwversion,
+        hostname: newDeviceConfig.hostname,
+      });
       return (await this.getDeviceRuntime(newDeviceConfig.mac)).toDTO();
     } catch (error) {
-      console.error(
-        `[DeviceService] Failed to create device ${deviceData.ipAddress}:`,
-        error,
-      );
+      log.error(`Failed to add device at ${deviceData.ipAddress}`, error);
       throw new Error(`Failed to create device ${deviceData.ipAddress}`);
     }
   }
@@ -257,11 +309,14 @@ export class DeviceService {
     device.assertNotBusy();
 
     const config = device.getConfig();
+    const oldIp = config.ipAddress;
     config.ipAddress = deviceData.ipAddress;
     device.emit("config_change", config);
-    console.log(
-      `[DeviceService] Device ${deviceData.macAddress} IP updated to "${deviceData.ipAddress}".`,
-    );
+    log.info("Device IP changed", {
+      mac: deviceData.macAddress,
+      oldIp,
+      ip: deviceData.ipAddress,
+    });
     return device.toDTO();
   }
 
@@ -270,7 +325,7 @@ export class DeviceService {
     await this.logoutFromDevice(macAddress);
     this.deviceManager.removeDevice(macAddress);
     this.configService.removeDevice(macAddress);
-    console.log(`[DeviceService] Device ${macAddress} removed.`);
+    log.info("Device removed", { mac: macAddress });
   }
 
   public async updateDeviceName(
@@ -281,6 +336,7 @@ export class DeviceService {
 
     device.getConfig().name = newName;
     device.emit("config_change", device.getConfig());
+    log.info("Device renamed", { mac, name: newName });
     return device.toDTO();
   }
 
@@ -301,6 +357,7 @@ export class DeviceService {
     });
 
     device.emit("config_change", config);
+    log.info("Socket names updated", { mac, sockets: socketNames });
     return device.toDTO();
   }
 
@@ -329,6 +386,10 @@ export class DeviceService {
     const devices = this.deviceManager.getAllDevices();
     const online = await this.deviceDiscoveryService.discoverOnlineDevices(devices);
     await this.deviceControlService.syncInBatches(online);
+    log.debug("Devices refreshed", {
+      total: devices.length,
+      online: online.length,
+    });
     return [...devices]
       .sort((dev1, dev2) => Number(dev2.isOnline) - Number(dev1.isOnline))
       .map((device) => device.toDTO());
@@ -338,6 +399,10 @@ export class DeviceService {
     const ungroupedDevices = this.deviceDiscoveryService.getUngroupedDevicesList();
     const onlineDevices = await this.deviceDiscoveryService.discoverOnlineDevices(ungroupedDevices);
     await this.deviceControlService.syncInBatches(onlineDevices);
+    log.debug("Ungrouped devices refreshed", {
+      total: ungroupedDevices.length,
+      online: onlineDevices.length,
+    });
     return ungroupedDevices.map((device) => device.toDTO());
   }
 
@@ -348,7 +413,7 @@ export class DeviceService {
     await this.deviceControlService.syncInBatches(onlineDevices);
 
     const onlineMacs = onlineDevices.map((d) => d.getConfig().macAddress);
-    console.debug("Ungrouped online:", onlineMacs);
+    log.debug("Found ungrouped online devices", { macs: onlineMacs });
     return onlineDevices.map((device) => device.toDTO());
   }
 
@@ -364,6 +429,11 @@ export class DeviceService {
 
     const online = await this.deviceDiscoveryService.discoverOnlineDevices(chosenDevices);
     await this.deviceControlService.syncInBatches(online);
+    log.debug("Group devices refreshed", {
+      group: groupIdx,
+      total: chosenDevices.length,
+      online: online.length,
+    });
 
     return chosenDevices.map((device) => device.toDTO());
   }

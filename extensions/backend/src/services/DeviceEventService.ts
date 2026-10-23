@@ -2,6 +2,9 @@ import { throttle } from "lodash";
 import { DeviceBusyDTO, DeviceStatusDTO } from "../types/DTOs";
 import { TransportService } from "../transport/TransportService";
 import { DeviceManager } from "./DeviceManager";
+import { createLogger } from "../logging/Logger";
+
+const log = createLogger("DeviceEventService");
 
 export class DeviceEventService {
   private static readonly OUTPUT_BROADCAST_THROTTLE_MS = 3000;
@@ -19,6 +22,14 @@ export class DeviceEventService {
 
   public onBusyChange = (status: DeviceBusyDTO) => {
     // Not throttled nor filtered by visibility, lock changes are rare
+    if (status.busyOperation) {
+      log.info("Device locked", {
+        mac: status.macAddress,
+        operation: status.busyOperation,
+      });
+    } else {
+      log.info("Device unlocked", { mac: status.macAddress });
+    }
     this.transportService.broadcast("device_busy", status);
   };
 
@@ -27,9 +38,7 @@ export class DeviceEventService {
     if (!this.deviceManager.isDeviceVisible(mac)) {
       return;
     }
-    console.debug(
-      `[DeviceEventService] Processing output change for device ${status.macAddress}`,
-    );
+    log.debug("Processing output change", { mac: status.macAddress });
     const throttledBroadcast = this.getOrCreateOutputThrottler(mac);
     throttledBroadcast(status);
   };
@@ -45,6 +54,9 @@ export class DeviceEventService {
 
     const throttled = throttle(
       (status: DeviceStatusDTO) => {
+        log.debug("Broadcasting throttled device update", {
+          mac: status.macAddress,
+        });
         this.transportService.broadcast("device_update", status);
       },
       this.outputBroadcastThrottleMs,
@@ -67,6 +79,7 @@ export class DeviceEventService {
 
     throttled.cancel();
     this.outputChangeThrottlers.delete(normalizedMac);
+    log.debug("Output throttler cleared", { mac: normalizedMac });
   }
 
   public subscribeToDeviceUpdates(
@@ -74,6 +87,10 @@ export class DeviceEventService {
     throttleTime: number = DeviceEventService.OUTPUT_BROADCAST_THROTTLE_MS,
   ): void {
     const normalizedMacs = macs.map((mac) => DeviceManager.normalizeMac(mac));
+    log.debug("Subscribing to device updates", {
+      macs: normalizedMacs,
+      throttleMs: throttleTime,
+    });
     this.deviceManager.getVisibleDevices().forEach((device) => {
       this.clearOutputThrottler(device.getConfig().macAddress);
     });

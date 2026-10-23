@@ -3,6 +3,9 @@ import { ConfigService } from "../config/ConfigService";
 import { DeviceManager } from "./DeviceManager";
 import { RuntimeDevice } from "../netio-api/services/RuntimeDevice";
 import { getBasicDeviceInfo } from "../netio-api/transport/univarsal";
+import { createLogger } from "../logging/Logger";
+
+const log = createLogger("DeviceDiscoveryService");
 
 export class DeviceDiscoveryService {
   private discover: DiscoverNetio;
@@ -15,10 +18,19 @@ export class DeviceDiscoveryService {
   }
 
   public async searchDevices(): Promise<void> {
+    const startedAt = Date.now();
+    log.debug("Device search started");
+    const knownBefore = this.deviceManager.getAllDevices().length;
     const foundDevices = (await this.discover.runAutoScan()).map((d) =>
       d.parse(),
     );
     await this.deviceManager.loadFromDiscover(foundDevices);
+    log.info("Device search finished", {
+      found: foundDevices.length,
+      new: this.deviceManager.getAllDevices().length - knownBefore,
+      total: this.deviceManager.getAllDevices().length,
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   public async discoverOnlineDevices(
@@ -30,15 +42,19 @@ export class DeviceDiscoveryService {
       Array.from(uniqueIPs).map((ip) =>
         getBasicDeviceInfo({ host: ip })
           .then((info) => {
-            console.debug(
-              `[DeviceDiscoveryService] Device at IP ${ip} is online with MAC ${info.data.deviceSN}`,
-            );
+            log.debug("Device is online", { ip, mac: info.data.deviceSN });
             activeDevicesMap.set(
               DeviceManager.normalizeMac(info.data.deviceSN),
               ip,
             );
           })
-          .catch(() => undefined),
+          .catch((error) => {
+            log.debug("Device is not reachable", {
+              ip,
+              reason: error instanceof Error ? error.message : String(error),
+            });
+            return undefined;
+          }),
       ),
     );
 
@@ -49,6 +65,11 @@ export class DeviceDiscoveryService {
     const updatedDevices = discoveredDevices.map((d) => {
       const newIp = activeDevicesMap.get(d.getConfig().macAddress);
       if (newIp && d.getConfig().ipAddress !== newIp) {
+        log.debug("Online device answered on a different IP", {
+          mac: d.getConfig().macAddress,
+          oldIp: d.getConfig().ipAddress,
+          ip: newIp,
+        });
         this.deviceManager.loadFromDiscover([
           {
             mac: d.getConfig().macAddress,
@@ -66,6 +87,10 @@ export class DeviceDiscoveryService {
       return d;
     });
 
+    log.debug("Online check finished", {
+      checked: devices.length,
+      online: updatedDevices.length,
+    });
     return updatedDevices;
   }
 

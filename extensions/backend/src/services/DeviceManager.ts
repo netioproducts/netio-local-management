@@ -3,6 +3,9 @@ import { Device } from "../netio-api/types/Device";
 import { DeviceInfo } from "../netio-api/discover/NetioParser";
 import { DeviceStatusDTO } from "../types/DTOs";
 import { IDeviceClient } from "../netio-api/types/IDeviceClient";
+import { createLogger } from "../logging/Logger";
+
+const log = createLogger("DeviceManager");
 
 export class DeviceManager {
   private devices = new Map<string, RuntimeDevice>();
@@ -30,6 +33,14 @@ export class DeviceManager {
       const normalizedMac = DeviceManager.normalizeMac(device.macAddress);
       const newRuntime = new RuntimeDevice(device);
       this.devices.set(normalizedMac, newRuntime);
+      log.debug("Device loaded from configuration", {
+        mac: normalizedMac,
+        ip: device.ipAddress,
+        name: device.name,
+        model: device.model,
+        fwVersion: device.fwVersion,
+        user: device.user,
+      });
     }
     onDevicesLoaded?.(Array.from(this.devices.values()));
   }
@@ -39,13 +50,26 @@ export class DeviceManager {
     const newDevices: [string, RuntimeDevice][] = [];
 
     for (const device of devices) {
-      if (!device.mac || !device.ip || !device.fwversion) continue;
+      if (!device.mac || !device.ip || !device.fwversion) {
+        log.debug("Ignoring incomplete discovery result", {
+          mac: device.mac,
+          ip: device.ip,
+          fwVersion: device.fwversion,
+        });
+        continue;
+      }
       const normalizedMac = DeviceManager.normalizeMac(device.mac);
 
       if (this.devices.has(normalizedMac)) {
         const runtime = this.devices.get(normalizedMac)!;
 
         if (runtime.getConfig().ipAddress !== device.ip) {
+          log.info("Device IP changed", {
+            mac: normalizedMac,
+            oldIp: runtime.getConfig().ipAddress,
+            ip: device.ip,
+            fwVersion: device.fwversion,
+          });
           const newConfig: Device = {
             ...runtime.getConfig(),
             macAddress: normalizedMac,
@@ -82,9 +106,13 @@ export class DeviceManager {
           model: device.model,
         });
         newRuntime.originalName = device.hostname || null;
-        console.log(
-          `Discovered new device: ${normalizedMac} at ${device.ip} with name ${device.hostname}`,
-        );
+        log.info("New device discovered", {
+          mac: normalizedMac,
+          ip: device.ip,
+          name: device.hostname,
+          model: device.model,
+          fwVersion: device.fwversion,
+        });
         newDevices.push([normalizedMac, newRuntime]);
       }
     }
@@ -108,6 +136,7 @@ export class DeviceManager {
     const normalizedMac = DeviceManager.normalizeMac(mac);
     this.devices.delete(normalizedMac);
     this.visibleDevices.delete(normalizedMac);
+    log.debug("Device removed from runtime", { mac: normalizedMac });
   }
 
   public getAllDevices(): RuntimeDevice[] {
@@ -119,9 +148,9 @@ export class DeviceManager {
   }
 
   private updateDeviceVisibility(macs: string[], visibility: boolean): void {
-    console.debug(
-      `Updating visibility for devices: ${macs.join(", ")} to ${visibility}`,
-    );
+    if (macs.length > 0) {
+      log.debug("Updating device visibility", { macs, visible: visibility });
+    }
     macs.forEach((mac) => {
       const normalizedMac = DeviceManager.normalizeMac(mac);
       if (this.devices.has(normalizedMac)) {
