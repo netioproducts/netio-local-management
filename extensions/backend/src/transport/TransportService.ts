@@ -104,7 +104,11 @@ export class TransportService {
 
     if (!handler) {
       console.warn(`[Transport] Unknown function: ${funcName}`);
-      this.sendError(requestId, `Function '${funcName}' not found`);
+      this.sendError(
+        requestId,
+        `Function '${funcName}' not found`,
+        "UnknownFunction",
+      );
       return;
     }
 
@@ -126,20 +130,36 @@ export class TransportService {
       await handler(context, params);
     } catch (err) {
       console.debug(`[Transport] Error in '${funcName}': ${String(err)}`);
-      this.sendError(requestId, String(err));
+      this.sendError(
+        requestId,
+        err instanceof Error ? err.message : String(err),
+        err instanceof Error ? err.name : "Error",
+        (err as { details?: unknown } | undefined)?.details,
+      );
     }
   }
 
-  private sendError(requestId: number | undefined, errorMessage: string) {
+  /**
+   * Sends a failed response. `code` is the error class name, so the frontend can react
+   * to specific errors (e.g. DeviceBusyError), `details` carries its structured data.
+   */
+  private sendError(
+    requestId: number | undefined,
+    errorMessage: string,
+    code: string,
+    details?: unknown,
+  ) {
     this.ext.sendMessage("responseNode", {
       success: false,
       error: errorMessage,
+      code: code,
+      details: details,
       requestId: requestId,
     });
   }
 
-  public broadcastError(errorMessage: string) {
-    this.broadcast("backendError", { error: errorMessage });
+  public broadcastError(errorMessage: string, macAddress?: string) {
+    this.broadcast("backendError", { error: errorMessage, macAddress });
   }
 
   public broadcastWarning(message: string) {

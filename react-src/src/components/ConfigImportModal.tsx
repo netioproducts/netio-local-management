@@ -5,7 +5,7 @@ import { os } from "@neutralinojs/lib";
 import { deviceService } from '../services/deviceService';
 import { eventService } from '../services/eventService';
 import { RxExclamationTriangle, RxCheckCircled, RxCrossCircled } from "react-icons/rx";
-import { notify } from '../services/notificationService';
+import { notifyError } from '../services/notificationService';
 
 interface ConfigImportModalProps {
   show: boolean;
@@ -73,10 +73,10 @@ export const ConfigImportModal: React.FC<ConfigImportModalProps> = ({
           setSuccessfulDevices(prev => new Set(prev).add(device.macAddress));
           deviceService.getDevice(device.macAddress).then(updated => {
             setDevices(prev => prev.map(d => d.macAddress === updated.macAddress ? updated : d));
-          });
+          }).catch((err) => notifyError(`Failed to refresh device: ${device.name || device.macAddress}`, err));
         },
         (err) => {
-          notify.error("Config import failed", `One or more devices failed to import config. Check the progress. ${err}`);
+          notifyError(`Config import failed: ${device.name || device.macAddress}`, err);
         })
     }));
     setIsImporting(false);

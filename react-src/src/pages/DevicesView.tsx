@@ -3,7 +3,7 @@ import { Col, Row } from "react-bootstrap";
 import { DeviceCardSM, DeviceCardSMPlaceholder } from "../components/DeviceCardSM";
 import { deviceService } from "../services/deviceService";
 import { Device } from "../models/Device";
-import { notify } from "../services/notificationService";
+import { notifyError } from "../services/notificationService";
 
 export const DevicesList: React.FC = () => {
   const [devices, setDevices] = React.useState<Device[]>([]);
@@ -20,7 +20,7 @@ export const DevicesList: React.FC = () => {
       const devices = await deviceService.getDevices();
       setDevices(devices);
     } catch (err) {
-      console.error("Failed to load groups", err);
+      notifyError("Failed to load devices", err);
     } finally {
       if (showLoadingState) {
         setIsInitialLoading(false);
@@ -37,8 +37,7 @@ export const DevicesList: React.FC = () => {
       }
       await loadDevices(true);
     } catch (err) {
-      notify.error("Failed to save device", err instanceof Error ? err.message : "Unknown error");
-      console.error("Failed to save device", err);
+      notifyError("Failed to save device", err);
     };
   }
 
@@ -47,8 +46,7 @@ export const DevicesList: React.FC = () => {
       await deviceService.removeDevice(device.macAddress);
       await loadDevices(true);
     } catch (err) {
-      notify.error("Failed to remove device", err instanceof Error ? err.message : "Unknown error");
-      console.error("Failed to remove device", err);
+      notifyError("Failed to remove device", err);
     }
   }
 

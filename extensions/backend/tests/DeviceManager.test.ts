@@ -117,6 +117,20 @@ describe("DeviceManager – loadFromDiscover", () => {
     ]);
     expect(calls).toContain("192.168.1.99");
   });
+
+  it("keeps busy_change listeners when updating an existing device IP", async () => {
+    const listener = () => {};
+    await manager.loadFromConfig(
+      [makeDevice("aabbccddeeff", "10.0.0.1")],
+      (cfg) => cfg[0].on("busy_change", listener),
+    );
+    await manager.loadFromDiscover([
+      makeDiscoveredDevice("AA:BB:CC:DD:EE:FF", "192.168.1.99"),
+    ]);
+    const updated = manager.getDevice("aabbccddeeff")!;
+    expect(updated.getConfig().ipAddress).toBe("192.168.1.99");
+    expect(updated.listeners("busy_change")).toEqual([listener]);
+  });
 });
 
 // ---------------------------------------------------------------------------

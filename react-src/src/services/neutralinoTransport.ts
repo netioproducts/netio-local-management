@@ -2,6 +2,7 @@ import { extensions, events } from "@neutralinojs/lib";
 import { notify } from "./notificationService";
 import { eventService } from "./eventService";
 import { EventKey } from "../models/Events";
+import { BackendError } from "./BackendError";
 
 const EXTENSION = "extNode"; //'extPython';
 const EVENT_REQUEST = "runNode"; //'runPython';
@@ -37,7 +38,13 @@ const handleResponse = (event: CustomEvent<any>) => {
   if (!response.error) {
     promiseHandlers.resolve(response.data);
   } else {
-    promiseHandlers.reject(new Error(response.error || "Unknown error"));
+    promiseHandlers.reject(
+      new BackendError(
+        response.error || "Unknown error",
+        response.code || "Error",
+        response.details,
+      ),
+    );
     console.log("Request resulted in error:", response.error);
   }
   console.log("Clearing pending request for ID:", requestId);
@@ -103,11 +110,10 @@ export const request = (
       const handlers = pendingRequests.get(requestId);
       if (!handlers) return;
       handlers.reject(
-        new Error(`Request to ${functionName} timed out after ${timeoutMs}ms`),
-      );
-      notify.error(
-        "Something went wrong!",
-        `Request to app backend timed out.`,
+        new BackendError(
+          `Request to ${functionName} timed out after ${timeoutMs}ms`,
+          "Timeout",
+        ),
       );
       pendingRequests.delete(requestId);
     }, timeoutMs);
@@ -125,7 +131,12 @@ export const request = (
       const handlers = pendingRequests.get(requestId);
       if (handlers) {
         if (handlers.timeout) clearTimeout(handlers.timeout);
-        handlers.reject(err);
+        handlers.reject(
+          new BackendError(
+            err instanceof Error ? err.message : String(err),
+            "TransportError",
+          ),
+        );
       }
       pendingRequests.delete(requestId);
     });

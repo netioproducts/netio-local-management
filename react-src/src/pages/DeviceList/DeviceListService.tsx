@@ -4,7 +4,7 @@ import { Device } from '../../models/Device';
 import { Group } from '../../models/Group';
 import { handleLoadingAction } from '../../utils/asyncUtils';
 import { SocketId } from '../../models/Socket';
-import { notify } from '../../services/notificationService';
+import { notify, notifyError } from '../../services/notificationService';
 import { mergeDeviceWithSocketPreserve } from '../../utils/deviceStateUtils';
 
 export const toggleDeviceSocket = async (
@@ -27,12 +27,15 @@ export const toggleDeviceSocket = async (
       })
     );
   } catch (err) {
-    console.error("Toggle failed for", id, err);
+    notifyError("Failed to switch output", err);
   }
 };
 
 export async function handleTopButtonClick(): Promise<void> {
-  return handleLoadingAction({}, deviceService.searchDevices);
+  return handleLoadingAction(
+    { onError: (err) => notifyError("Device search failed", err) },
+    deviceService.searchDevices,
+  );
 }
 
 export async function getDeviceGroups(): Promise<Group[]> {
@@ -48,7 +51,7 @@ export async function getDeviceGroups(): Promise<Group[]> {
 export async function handleLogin(macAddress: string, userName: string, setDevices: React.Dispatch<React.SetStateAction<Device[]>>): Promise<void> {
   await handleLoadingAction<Device | null>(
     {
-      onError: () => notify.error("Login failed", `Failed to login to device`),
+      onError: (err) => notifyError("Login failed", err),
       onLoaded: (device) => {
         if (!device) {
           notify.error("Login failed", "Failed to login to device");

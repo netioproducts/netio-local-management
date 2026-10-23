@@ -35,6 +35,16 @@ export const mergeDeviceWithSocketPreserve = (
   };
 };
 
+export const applyDeviceBusyUpdate = (
+  current: Device,
+  busy: { macAddress: string; busyOperation: string | null },
+): Device => {
+  if (normalizeMac(current.macAddress) !== normalizeMac(busy.macAddress)) {
+    return current;
+  }
+  return { ...current, busyOperation: busy.busyOperation };
+};
+
 export const applyDeviceStatusUpdate = (
   current: Device,
   status: DeviceStatusDTO,

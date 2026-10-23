@@ -1,5 +1,10 @@
 import { EventEmitter } from "events";
-import { DeviceDTO, DeviceStatusDTO, SocketDTO } from "../../types/DTOs";
+import {
+  DeviceBusyDTO,
+  DeviceDTO,
+  DeviceStatusDTO,
+  SocketDTO,
+} from "../../types/DTOs";
 import { SocketId } from "../../types/SocketId";
 import { NormalizedOutputStatus } from "../providers/NetioProvider";
 import { checkConnectivity } from "../transport/univarsal";
@@ -137,7 +142,11 @@ export class RuntimeDevice extends EventEmitter {
   public assertNotBusy(): void {
     if (this.busyOperation) {
       throw new DeviceBusyError(
-        `Device ${this._config.macAddress} is busy: ${this.busyOperation}.`,
+        `Device ${this._config.name || this._config.macAddress} is busy: ${this.busyOperation}.`,
+        {
+          macAddress: this._config.macAddress,
+          operation: this.busyOperation,
+        },
       );
     }
   }
@@ -168,8 +177,16 @@ export class RuntimeDevice extends EventEmitter {
     }
   }
 
+  private emitBusyChange(): void {
+    this.emit("busy_change", {
+      macAddress: this._config.macAddress,
+      busyOperation: this.busyOperation,
+    } as DeviceBusyDTO);
+  }
+
   private lockConnection(operation: string): void {
     this.busyOperation = operation;
+    this.emitBusyChange();
 
     if (this.idleTimeout) {
       clearTimeout(this.idleTimeout);
@@ -186,6 +203,7 @@ export class RuntimeDevice extends EventEmitter {
 
   private unlockConnection(): void {
     this.busyOperation = null;
+    this.emitBusyChange();
 
     this.keepConnectionAlive();
     if (this.pollingEnabled) {
@@ -265,6 +283,7 @@ export class RuntimeDevice extends EventEmitter {
       user: this._config.user,
       isOnline: this.isOnline,
       isLoggedIn: this.isLoggedIn,
+      busyOperation: this.busyOperation,
       sockets: Object.values(this.sockets ?? {}).map(
         (s) =>
           ({

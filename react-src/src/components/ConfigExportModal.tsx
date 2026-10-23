@@ -3,7 +3,7 @@ import { Modal, Button, ListGroup, Alert, Spinner } from 'react-bootstrap';
 import { Device } from '../models/Device';
 import { deviceService } from '../services/deviceService';
 import { RxExclamationTriangle, RxCheckCircled, RxCrossCircled } from "react-icons/rx";
-import { notify } from '../services/notificationService';
+import { notifyError } from '../services/notificationService';
 
 interface ConfigExportModalProps {
   show: boolean;
@@ -45,7 +45,7 @@ export const ConfigExportModal: React.FC<ConfigExportModalProps> = ({
         },
         (err) => {
           setStatusMap(prev => ({ ...prev, [device.macAddress]: "Failed" }));
-          notify.error("Config export failed", `Failed to export config from ${device.name}. ${err}`);
+          notifyError(`Config export failed: ${device.name || device.macAddress}`, err);
         })
     }));
     setIsExporting(false);

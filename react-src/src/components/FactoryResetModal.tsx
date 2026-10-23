@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Modal, Button, ListGroup, Alert, Spinner } from 'react-bootstrap';
 import { deviceService } from '../services/deviceService';
-import { notify } from '../services/notificationService';
+import { notify, notifyError } from '../services/notificationService';
 import { RxExclamationTriangle, RxCheckCircled, RxCrossCircled } from "react-icons/rx";
 
 interface FactoryResetModalProps {
@@ -36,7 +36,7 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
         notify.success("Successful", `Device ${macAddress} factory reset`);
       } catch (err) {
         setStatusMap(prev => ({ ...prev, [macAddress]: "Failed" }));
-        notify.error("Failed to factory reset", `Failed to factory reset device ${macAddress}: ${err}`);
+        notifyError(`Factory reset failed: ${macAddress}`, err);
         hasErrors = true;
       }
     }));

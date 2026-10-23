@@ -2,6 +2,7 @@ import { ConfigService } from "../config/ConfigService";
 import { DeviceManager } from "./DeviceManager";
 import { User, Device } from "../config/ConfigModel";
 import { DeviceDTO, DeviceGroupDTO } from "../types/DTOs";
+import { DeviceOfflineError, UnauthorizedError } from "../netio-api/types/Errors";
 import { getBasicDeviceInfo } from "../netio-api/transport/univarsal";
 import { RuntimeDevice } from "../netio-api/services/RuntimeDevice";
 import { DeviceEventService } from "./DeviceEventService";
@@ -9,7 +10,7 @@ import { DeviceControlService } from "./DeviceControlService";
 import { DeviceDiscoveryService } from "./DeviceDiscoveryService";
 
 export class DeviceService {
-  public errorBroadcast?: (message: string) => void;
+  public errorBroadcast?: (message: string, macAddress?: string) => void;
 
   constructor(
     private configService: ConfigService,
@@ -31,10 +32,18 @@ export class DeviceService {
     }
   };
 
+  private attachDeviceListeners(device: RuntimeDevice): void {
+    device.removeAllListeners("config_change");
+    device.on("config_change", this.onConfigChange);
+    device.removeAllListeners("output_change");
+    device.on("output_change", this.deviceEventService.onOutputChange);
+    device.removeAllListeners("busy_change");
+    device.on("busy_change", this.deviceEventService.onBusyChange);
+  }
+
   private onDevicesLoaded = (devices: RuntimeDevice[]) => {
     devices.forEach((device) => {
-      device.on("config_change", this.onConfigChange);
-      device.on("output_change", this.deviceEventService.onOutputChange);
+      this.attachDeviceListeners(device);
 
       const [username, password] = [
         device.getConfig().username,
@@ -87,16 +96,21 @@ export class DeviceService {
 
     try {
       await device.setupCredentials(user.username, user.password, this.deviceManager.clientFactory);
-      device.removeAllListeners("config_change");
-      device.on("config_change", this.onConfigChange);
-      device.removeAllListeners("output_change");
-      device.on("output_change", this.deviceEventService.onOutputChange);
-
+      this.attachDeviceListeners(device);
       await device.syncState();
-      console.log(`[DeviceService] Login to device ${mac} successful.`);
     } catch (error) {
-      throw new Error(`Failed to login to device ${mac}.`);
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to login to device ${mac}: ${reason}`);
     }
+
+    // syncState does not throw, it only records the result
+    if (!device.isOnline) {
+      throw new DeviceOfflineError(`Device ${mac} is offline.`);
+    }
+    if (!device.isLoggedIn) {
+      throw new UnauthorizedError(`Wrong credentials for device ${mac}.`);
+    }
+    console.log(`[DeviceService] Login to device ${mac} successful.`);
     
     const info = await device.getClient().getSystemInfo();
     device.originalName = info.name;
@@ -141,31 +155,61 @@ export class DeviceService {
   public async updateCredentialsForUser(user: string): Promise<void> {
     this.getUser(user);
 
-    await Promise.allSettled(
+    await this.runInBackground(
       this.deviceManager
         .getAllDevices()
-        .filter((d) => d.getConfig().user === user)
-        .map(async (d) => {
-          // Runs in background, so wait for a running exclusive operation instead of failing
-          await d.whenIdle();
-          await this.logoutFromDevice(d.getConfig().macAddress);
-          return this.loginToDevice(d.getConfig().macAddress, user);
-        }),
+        .filter((d) => d.getConfig().user === user),
+      async (d) => {
+        await this.logoutFromDevice(d.getConfig().macAddress);
+        await this.loginToDevice(d.getConfig().macAddress, user);
+      },
     );
   }
 
   public async clearCredentialsForUser(userName: string): Promise<void> {
     this.getUser(userName);
 
-    await Promise.allSettled(
+    await this.runInBackground(
       this.deviceManager
         .getAllDevices()
-        .filter((d) => d.getConfig().user === userName)
-        .map(async (d) => {
-          await d.whenIdle();
-          return this.logoutFromDevice(d.getConfig().macAddress);
-        }),
+        .filter((d) => d.getConfig().user === userName),
+      async (d) => {
+        await this.logoutFromDevice(d.getConfig().macAddress);
+      },
     );
+  }
+
+  /**
+   * Runs an operation nobody waits for on each device. Waits for a running exclusive
+   * operation instead of failing, failures are reported to the frontend.
+   */
+  private async runInBackground(
+    devices: RuntimeDevice[],
+    operation: (device: RuntimeDevice) => Promise<void>,
+  ): Promise<void> {
+    const results = await Promise.allSettled(
+      devices.map(async (d) => {
+        await d.whenIdle();
+        await operation(d);
+      }),
+    );
+
+    results.forEach((result, idx) => {
+      if (result.status === "fulfilled") return;
+      const config = devices[idx].getConfig();
+      const reason =
+        result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason);
+      console.error(
+        `[DeviceService] Background operation failed for ${config.macAddress}:`,
+        result.reason,
+      );
+      this.errorBroadcast?.(
+        `Failed to update credentials for device ${config.name || config.macAddress}: ${reason}`,
+        config.macAddress,
+      );
+    });
   }
 
   public async changeDeviceUser(

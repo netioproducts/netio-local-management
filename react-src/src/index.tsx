@@ -4,6 +4,7 @@ import App from './App';
 
 import { init, app, events } from "@neutralinojs/lib"
 import { broadcastRaw, initTransport } from './services/neutralinoTransport';
+import { notifyError } from './services/notificationService';
 
 import "bootstrap/dist/css/bootstrap.min.css";
 
@@ -18,6 +19,11 @@ root.render(
 
 init();
 initTransport();
+
+// Safety net for failed requests nobody handled
+window.addEventListener("unhandledrejection", (event) => {
+  notifyError("Unexpected error", event.reason);
+});
 
 // console.log = () => { };
 // console.debug = () => { };

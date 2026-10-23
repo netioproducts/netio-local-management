@@ -61,11 +61,18 @@ const deviceService = new DeviceService(
 const userService = new UserService(configService);
 const groupService = new GroupService(configService);
 
+const reportBackgroundError = (error: unknown) => {
+  console.error("Background operation failed:", error);
+  transportService.broadcastError(
+    error instanceof Error ? error.message : String(error),
+  );
+};
+
 userService.on("user_updated", (userName) => {
-  deviceService.updateCredentialsForUser(userName).catch();
+  deviceService.updateCredentialsForUser(userName).catch(reportBackgroundError);
 });
 userService.on("user_removed", (userName) => {
-  deviceService.clearCredentialsForUser(userName).catch();
+  deviceService.clearCredentialsForUser(userName).catch(reportBackgroundError);
 });
 
 // Start functions

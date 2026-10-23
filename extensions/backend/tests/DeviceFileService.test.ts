@@ -80,7 +80,7 @@ describe("DeviceFileService – device lock", () => {
     );
     expect(dev.isBusy).toBe(false);
     expect(client.calls.updateFirmware).toBe(0);
-    expect(broadcasts.at(-1)?.payload.status).toBe("Failed");
+    expect(broadcasts[broadcasts.length - 1]?.payload.status).toBe("Failed");
   });
 
   it("firmware upload with wrong credentials reports it", async () => {

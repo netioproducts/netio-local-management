@@ -59,6 +59,7 @@ export class DeviceManager {
           const newRuntime = new RuntimeDevice(newConfig);
           runtime.listeners("config_change").forEach(l => newRuntime.on("config_change", l as any));
           runtime.listeners("output_change").forEach(l => newRuntime.on("output_change", l as any));
+          runtime.listeners("busy_change").forEach(l => newRuntime.on("busy_change", l as any));
           newRuntime.emit("config_change", newConfig);
 
           if (

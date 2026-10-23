@@ -4,7 +4,7 @@ import { Device } from '../models/Device';
 import { deviceService } from '../services/deviceService';
 import { eventService } from '../services/eventService';
 import { RxExclamationTriangle, RxCheckCircled, RxCrossCircled } from "react-icons/rx";
-import { notify } from '../services/notificationService';
+import { notifyError } from '../services/notificationService';
 
 interface ConfigRestoreModalProps {
   show: boolean;
@@ -53,11 +53,11 @@ export const ConfigRestoreModal: React.FC<ConfigRestoreModalProps> = ({
           setProgressMap(prev => ({ ...prev, [device.macAddress]: 100 }));
           deviceService.getDevice(device.macAddress).then(updated => {
             setDevices(prev => prev.map(d => d.macAddress === updated.macAddress ? updated : d));
-          });
+          }).catch((err) => notifyError(`Failed to refresh device: ${device.name || device.macAddress}`, err));
         },
         (err) => {
           setStatusMap(prev => ({ ...prev, [device.macAddress]: "Failed" }));
-          notify.error("Config restore failed", `Failed to restore config for ${device.name}. ${err.message || err}`);
+          notifyError(`Config restore failed: ${device.name || device.macAddress}`, err);
         })
     }));
     setIsRestoring(false);

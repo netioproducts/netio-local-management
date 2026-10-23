@@ -3,7 +3,7 @@ import { Modal, Button, Form, Row, Col, Spinner } from "react-bootstrap";
 import { Device } from "../models/Device";
 import { User } from "../models/User";
 import { deviceService } from "../services/deviceService";
-import { notify } from "../services/notificationService";
+import { notify, notifyError } from "../services/notificationService";
 
 interface DeviceSettingsModalProps {
   show: boolean;
@@ -125,7 +125,7 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({
       onDeviceUpdated(updatedDevice);
       onHide();
     } catch (error) {
-      notify.error("Save failed", String(error));
+      notifyError("Save failed", error);
     } finally {
       setIsSaving(false);
     }
@@ -146,7 +146,7 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({
       onDeviceUpdated(updatedDevice);
       onHide();
     } catch (error) {
-      notify.error("User change failed", String(error));
+      notifyError("User change failed", error);
       setSelectedUser(device.user || "");
     } finally {
       setIsChangingUser(false);
@@ -163,7 +163,7 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({
       onDeviceUpdated(updatedDevice);
       onHide();
     } catch (error) {
-      notify.error("Logout failed", String(error));
+      notifyError("Logout failed", error);
     } finally {
       setIsLoggingOut(false);
     }

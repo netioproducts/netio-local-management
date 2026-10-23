@@ -5,7 +5,7 @@ import { os } from "@neutralinojs/lib";
 import { deviceService } from '../services/deviceService';
 import { eventService } from '../services/eventService';
 import { RxExclamationTriangle, RxCheckCircled, RxCrossCircled } from "react-icons/rx";
-import { notify } from '../services/notificationService';
+import { notifyError } from '../services/notificationService';
 
 interface FirmwareUploadModalProps {
   show: boolean;
@@ -67,10 +67,10 @@ export const FirmwareUploadModal: React.FC<FirmwareUploadModalProps> = ({
           setSuccessfulDevices(prev => new Set(prev).add(device.macAddress));
           deviceService.getDevice(device.macAddress).then(updated => {
             setDevices(prev => prev.map(d => d.macAddress === updated.macAddress ? updated : d));
-          });
+          }).catch((err) => notifyError(`Failed to refresh device: ${device.name || device.macAddress}`, err));
         },
         (err) => {
-          notify.error("Firmware update failed", `One or more devices failed to update. Check the progress. ${err}`);
+          notifyError(`Firmware update failed: ${device.name || device.macAddress}`, err);
         })
     }));
     setIsUpgrading(false);

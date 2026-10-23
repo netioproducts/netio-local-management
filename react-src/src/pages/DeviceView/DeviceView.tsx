@@ -5,12 +5,12 @@ import { Device } from "../../models/Device";
 import Container from "react-bootstrap/esm/Container";
 import { handleLoadingAction } from "../../utils/asyncUtils";
 import { deviceService } from "../../services/deviceService";
-import { notify } from "../../services/notificationService";
+import { notify, notifyError } from "../../services/notificationService";
 import LoginOverlay from "../../components/DeviceCard/LoginOverlay";
 import { User } from "../../models/User";
 import { appService } from "../../services/appSerivce";
 import { SocketSwitch } from "../../components/DeviceCard/DeviceCard";
-import { Button, Card, Col, Placeholder, Row } from "react-bootstrap";
+import { Badge, Button, Card, Col, Placeholder, Row } from "react-bootstrap";
 import { IconButton } from "../../components/IconButton";
 import { MdOutlineEdit } from "react-icons/md";
 import { os } from "@neutralinojs/lib";
@@ -23,6 +23,7 @@ import "./DeviceView.css";
 import { eventService } from "../../services/eventService";
 import { DeviceStatusDTO } from "../../models/DeviceUpdate";
 import {
+  applyDeviceBusyUpdate,
   applyDeviceStatusUpdate,
   mergeDeviceWithSocketPreserve,
   normalizeMac,
@@ -42,28 +43,28 @@ export const DeviceView = () => {
   const [settingsModalOpen, setSettingsModalOpen] = React.useState(false);
 
   const getUsers = useCallback(async () => {
-    handleLoadingAction<User[]>({
+    await handleLoadingAction<User[]>({
       setLoading: setIsPending,
       onLoaded: setUsers,
-      onError: () => notify.error("Failed to load users", "Failed to load users"),
-    }, () => appService.getUsers());
+      onError: (err) => notifyError("Failed to load users", err),
+    }, () => appService.getUsers()).catch(() => { });
   }, []);
 
   const getAllDetails = useCallback(async (id: string) => {
     console.debug(`Loading all details for device ${id}...`);
-    handleLoadingAction<any>({
+    await handleLoadingAction<any>({
       setLoading: setIsLoadingDetails,
       onLoaded: (deviceInfo) => {
         setInfo(deviceInfo);
         console.log("Device info loaded:", deviceInfo);
       },
-      onError: () => notify.error("Failed to load details", `Failed to load device details for ${id}`),
-    }, () => deviceService.getDeviceDetails(id));
+      onError: (err) => notifyError(`Failed to load device details: ${id}`, err),
+    }, () => deviceService.getDeviceDetails(id)).catch(() => { });
   }, []);
 
   const getDeviceDetails = useCallback(async (id: string) => {
     console.debug(`Loading details for device ${id}...`);
-    handleLoadingAction<Device>({
+    await handleLoadingAction<Device>({
       setLoading: setIsLoadingDevice,
       onLoaded: async (device) => {
         setDevice(device);
@@ -72,8 +73,8 @@ export const DeviceView = () => {
           await getUsers();
         }
       },
-      onError: () => notify.error("Failed to load details", `Failed to load device details for ${id}`),
-    }, () => deviceService.getDevice(id));
+      onError: (err) => notifyError(`Failed to load device: ${id}`, err),
+    }, () => deviceService.getDevice(id)).catch(() => { });
   }, [getUsers, getAllDetails]);
 
   useEffect(() => {
@@ -101,10 +102,18 @@ export const DeviceView = () => {
     };
   }, [deviceId, getDeviceDetails]);
 
+  useEffect(() => {
+    return eventService.on("device_busy", (busy) => {
+      setDevice((prevDevice) =>
+        prevDevice ? applyDeviceBusyUpdate(prevDevice, busy) : prevDevice,
+      );
+    });
+  }, []);
+
   const handleLogin = async (macAddress: string, userName: string): Promise<void> => {
     await handleLoadingAction<Device | null>(
       {
-        onError: () => notify.error("Login failed", `Failed to login to device`),
+        onError: (err) => notifyError("Login failed", err),
         onLoaded: (device) => {
           if (!device) {
             notify.error("Login failed", "Failed to login to device");
@@ -142,6 +151,9 @@ export const DeviceView = () => {
           style={{ color: device.isOnline ? 'green' : 'red', cursor: 'pointer' }}>
           {device.isOnline ? 'Online' : 'Offline'}
           <IoMdRefresh />
+          {device.busyOperation && (
+            <Badge bg="warning" text="dark" className="ms-2">Busy: {device.busyOperation}</Badge>
+          )}
         </div>
         <Col xs="auto" className="text-start">
           <div style={{ fontWeight: "bold", fontSize: "1.1em", textDecoration: "none", color: "var(--netio-green)" }}>{device.name}</div>
@@ -194,23 +206,27 @@ export const DeviceView = () => {
                   socket={socket}
                   toggleFunction={
                     async (id, newState) => {
-                      const updatedDevice = await deviceService.controlSocket(
-                        id,
-                        newState,
-                      );
-
-                      setDevice((prevDevice) => {
-                        if (!prevDevice) {
-                          return updatedDevice;
-                        }
-                        return mergeDeviceWithSocketPreserve(
-                          prevDevice,
-                          updatedDevice,
+                      try {
+                        const updatedDevice = await deviceService.controlSocket(
+                          id,
+                          newState,
                         );
-                      });
+
+                        setDevice((prevDevice) => {
+                          if (!prevDevice) {
+                            return updatedDevice;
+                          }
+                          return mergeDeviceWithSocketPreserve(
+                            prevDevice,
+                            updatedDevice,
+                          );
+                        });
+                      } catch (err) {
+                        notifyError("Failed to switch output", err);
+                      }
                     }
                   }
-                  disabled={isPending || !device.isOnline}
+                  disabled={isPending || !device.isOnline || !!device.busyOperation}
                 />
               </Col>
             ))}

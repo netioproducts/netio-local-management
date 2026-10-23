@@ -1,6 +1,7 @@
 import React from "react";
 import { User } from "../models/User";
 import { appService } from "../services/appSerivce";
+import { notifyError } from "../services/notificationService";
 import { UserCard } from "../components/UserCard";
 import { Col, Row } from "react-bootstrap";
 
@@ -12,12 +13,16 @@ export const UserList: React.FC = () => {
       const users = await appService.getUsers();
       setUsers(users);
     } catch (err) {
-      console.error("Failed to load users", err);
+      notifyError("Failed to load users", err);
     }
   };
 
   const handleSaveUser = async (updatedUser: User) => {
-    await appService.saveUser(updatedUser);
+    try {
+      await appService.saveUser(updatedUser);
+    } catch (err) {
+      notifyError("Failed to save user", err);
+    }
     await loadUsers();
   };
 
@@ -26,7 +31,7 @@ export const UserList: React.FC = () => {
       await appService.removeUser(user.name);
       await loadUsers();
     } catch (err) {
-      console.error("Failed to remove user", err);
+      notifyError("Failed to remove user", err);
     }
   }
 

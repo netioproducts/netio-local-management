@@ -3,6 +3,7 @@ import { Col, Row } from "react-bootstrap";
 import { GroupCard } from "../components/GroupCard";
 import { Group } from "../models/Group";
 import { deviceService } from "../services/deviceService";
+import { notifyError } from "../services/notificationService";
 
 export const GroupList: React.FC = () => {
   const [groups, setGroups] = React.useState<Group[]>([]);
@@ -12,15 +13,19 @@ export const GroupList: React.FC = () => {
       const groups = await deviceService.getDeviceGroupsP();
       setGroups(groups);
     } catch (err) {
-      console.error("Failed to load groups", err);
+      notifyError("Failed to load groups", err);
     }
   };
 
   const handleSaveGroup = async (updatedGroup: { id?: number, name: string }) => {
-    if (updatedGroup.id !== undefined) {
-      await deviceService.updateDeviceGroup(updatedGroup as Group);
-    } else {
-      await deviceService.createDeviceGroup(updatedGroup.name);
+    try {
+      if (updatedGroup.id !== undefined) {
+        await deviceService.updateDeviceGroup(updatedGroup as Group);
+      } else {
+        await deviceService.createDeviceGroup(updatedGroup.name);
+      }
+    } catch (err) {
+      notifyError("Failed to save group", err);
     }
     await loadGroups();
   };
@@ -30,7 +35,7 @@ export const GroupList: React.FC = () => {
       await deviceService.removeDeviceGroup(group.id);
       await loadGroups();
     } catch (err) {
-      console.error("Failed to remove group", err);
+      notifyError("Failed to remove group", err);
     }
   }
 

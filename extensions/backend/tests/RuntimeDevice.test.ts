@@ -820,6 +820,46 @@ describe("RuntimeDevice – exclusive operations", () => {
     expect(client.calls.initialize).toBe(2);
   });
 
+  it("emits busy_change on lock and unlock and exposes it in the DTO", async () => {
+    const { dev } = makeLoggedDevice();
+    const events: any[] = [];
+    dev.on("busy_change", (e) => events.push(e));
+
+    const lock = holdLock(dev);
+    expect(dev.toDTO().busyOperation).toBe("test operation");
+    lock.release();
+    await lock.done;
+
+    expect(events).toEqual([
+      { macAddress: "aabbccddeeff", busyOperation: "test operation" },
+      { macAddress: "aabbccddeeff", busyOperation: null },
+    ]);
+    expect(dev.toDTO().busyOperation).toBeNull();
+  });
+
+  it("busy error carries device and operation details", async () => {
+    const { dev } = makeLoggedDevice();
+    dev.getConfig().name = "Lab";
+    const lock = holdLock(dev);
+
+    try {
+      dev.assertNotBusy();
+      throw new Error("assertNotBusy did not throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DeviceBusyError);
+      expect((err as DeviceBusyError).message).toBe(
+        "Device Lab is busy: test operation.",
+      );
+      expect((err as DeviceBusyError).details).toEqual({
+        macAddress: "aabbccddeeff",
+        operation: "test operation",
+      });
+    }
+
+    lock.release();
+    await lock.done;
+  });
+
   it("factoryReset runs exclusively", async () => {
     const { dev } = makeLoggedDevice();
     const lock = holdLock(dev);

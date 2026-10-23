@@ -1,5 +1,5 @@
 import { throttle } from "lodash";
-import { DeviceStatusDTO } from "../types/DTOs";
+import { DeviceBusyDTO, DeviceStatusDTO } from "../types/DTOs";
 import { TransportService } from "../transport/TransportService";
 import { DeviceManager } from "./DeviceManager";
 
@@ -16,6 +16,11 @@ export class DeviceEventService {
     private transportService: TransportService,
     private deviceManager: DeviceManager,
   ) {}
+
+  public onBusyChange = (status: DeviceBusyDTO) => {
+    // Not throttled nor filtered by visibility, lock changes are rare
+    this.transportService.broadcast("device_busy", status);
+  };
 
   public onOutputChange = (status: DeviceStatusDTO) => {
     const mac = DeviceManager.normalizeMac(status.macAddress);

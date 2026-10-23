@@ -11,4 +11,5 @@ export interface Device {
   isOnline: boolean;
   isLoggedIn: boolean;
   user?: string;
+  busyOperation?: string | null; // Running exclusive operation (e.g. firmware update)
 }

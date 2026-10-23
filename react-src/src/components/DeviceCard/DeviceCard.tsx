@@ -7,7 +7,7 @@ import Container from "react-bootstrap/esm/Container";
 import Spinner from "react-bootstrap/esm/Spinner";
 import LoginOverlay from "./LoginOverlay";
 import "./DeviceCard.css";
-import { Placeholder } from "react-bootstrap";
+import { Badge, Placeholder } from "react-bootstrap";
 import { Link } from "react-router";
 import { RxExclamationTriangle } from "react-icons/rx";
 
@@ -46,6 +46,9 @@ export const DeviceCard: React.FC<DeviceCardProps> = ({ device, sockets, selecte
         <span>{device.model}</span>
         <span>{device.fwVersion}</span>
         <span style={{ color: device.isOnline ? 'green' : 'red' }}>{device.isOnline ? 'Online' : 'Offline'}</span>
+        {device.busyOperation && (
+          <span><Badge bg="warning" text="dark">Busy: {device.busyOperation}</Badge></span>
+        )}
       </div>
       {device.isLoggedIn || !device.isOnline ? (
         <div className="sockets-container">
@@ -54,7 +57,7 @@ export const DeviceCard: React.FC<DeviceCardProps> = ({ device, sockets, selecte
               key={`${socketProp.socket.id[0]}-${socketProp.socket.id[1]}-socket`}
               socket={socketProp.socket}
               toggleFunction={socketProp.toggleFunction}
-              disabled={isPending || !device.isOnline}
+              disabled={isPending || !device.isOnline || !!device.busyOperation}
             />
           ))}
         </div>
@@ -197,6 +200,9 @@ export const DeviceCardCompact: React.FC<DeviceCardProps> = ({ device, sockets, 
         <Link to={`/device/${device.macAddress}`} style={{ fontWeight: "bold", fontSize: "1.1em", textDecoration: "none", color: "var(--netio-green)" }}>{device.name}</Link>
         <span>{device.fwVersion}</span>
         <span style={{ color: device.isOnline ? 'green' : 'red' }}>{device.isOnline ? 'Online' : 'Offline'}</span>
+        {device.busyOperation && (
+          <span><Badge bg="warning" text="dark">Busy: {device.busyOperation}</Badge></span>
+        )}
       </div>
       {device.isLoggedIn || !device.isOnline ? (
         <div className="sockets-container">
@@ -205,7 +211,7 @@ export const DeviceCardCompact: React.FC<DeviceCardProps> = ({ device, sockets, 
               key={`${socketProp.socket.id[0]}-${socketProp.socket.id[1]}-socket-compact-state`}
               socket={socketProp.socket}
               toggleFunction={socketProp.toggleFunction}
-              disabled={isPending || !device.isOnline}
+              disabled={isPending || !device.isOnline || !!device.busyOperation}
             />
           ))}
         </div>

@@ -467,6 +467,7 @@ describe("Device services – busy device", () => {
     const eventService = {
       clearOutputThrottler: () => {},
       onOutputChange: () => {},
+      onBusyChange: () => {},
     };
     controlService = new DeviceControlService(manager, eventService as any);
     deviceService = new DeviceService(
@@ -526,6 +527,40 @@ describe("Device services – busy device", () => {
 
     lock.release();
     await lock.done;
+  });
+
+  it("reports a background credential update failure with the device MAC", async () => {
+    const { makeFakeClient } = await import("./helpers/fakeDeviceClient");
+    const { UnauthorizedError } = await import("../src/netio-api/types/Errors");
+    addDevice(MAC, makeFakeClient());
+    // Login after the update uses a client rejecting the credentials
+    (manager as any).clientFactory = () =>
+      makeFakeClient({
+        initialize: async () => {
+          throw new UnauthorizedError();
+        },
+      });
+    const errors: [string, string | undefined][] = [];
+    deviceService.errorBroadcast = (message: string, mac?: string) =>
+      errors.push([message, mac]);
+
+    await deviceService.updateCredentialsForUser("Default");
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0][0]).toContain("Wrong credentials");
+    expect(errors[0][1]).toBe(MAC);
+  });
+
+  it("login does not duplicate device listeners", async () => {
+    const { makeFakeClient } = await import("./helpers/fakeDeviceClient");
+    const dev = addDevice(MAC, makeFakeClient());
+
+    await deviceService.loginToDevice(MAC, "Default");
+    await deviceService.loginToDevice(MAC, "Default");
+
+    for (const event of ["config_change", "output_change", "busy_change"]) {
+      expect(dev.listenerCount(event)).toBe(1);
+    }
   });
 
   it("credential update waits until the device is unlocked", async () => {

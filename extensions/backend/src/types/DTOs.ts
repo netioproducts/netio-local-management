@@ -23,6 +23,12 @@ export interface DeviceDTO {
   isOnline: boolean;
   isLoggedIn: boolean;
   user?: string;
+  busyOperation: string | null; // Running exclusive operation, null when idle
+}
+
+export interface DeviceBusyDTO {
+  macAddress: string;
+  busyOperation: string | null;
 }
 
 export interface SocketDTO {

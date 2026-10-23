@@ -34,7 +34,10 @@ export class UnauthorizedError extends Error {
 }
 
 export class DeviceBusyError extends Error {
-  constructor(message: string = "Device is busy") {
+  constructor(
+    message: string,
+    public readonly details: { macAddress: string; operation: string },
+  ) {
     super(message);
     this.name = "DeviceBusyError";
   }

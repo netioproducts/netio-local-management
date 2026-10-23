@@ -21,7 +21,7 @@ import { FilterBar } from "../../components/FilterBar/FilterBar";
 import { LuGroup, LuUngroup } from "react-icons/lu";
 import { DropdownItem, IconButton, IconDropdownButton } from "../../components/IconButton";
 import { RiAlarmWarningLine, RiRemoteControl2Fill, RiRemoteControl2Line } from "react-icons/ri";
-import { notify } from "../../services/notificationService";
+import { notify, notifyError } from "../../services/notificationService";
 import { GrUpdate, GrSelect, GrStatusWarning } from "react-icons/gr";
 import { FiLogIn, FiSettings } from "react-icons/fi";
 import { FirmwareUploadModal } from "../../components/FirmwareUploadModal";
@@ -29,6 +29,7 @@ import { ConfigManagementModal } from "../../components/ConfigManagementModal";
 import { FactoryResetModal } from "../../components/FactoryResetModal";
 import { eventService } from "../../services/eventService";
 import {
+  applyDeviceBusyUpdate,
   applyDeviceStatusUpdate,
   mergeDeviceWithSocketPreserve,
 } from "../../utils/deviceStateUtils";
@@ -56,7 +57,7 @@ export const DeviceList: React.FC = () => {
       const data = await appService.getUsers();
       setUsers(data);
     } catch (err) {
-      console.error("Failed to load users", err);
+      notifyError("Failed to load users", err);
     }
   };
 
@@ -65,6 +66,7 @@ export const DeviceList: React.FC = () => {
     await handleLoadingAction<Group[]>({
       checkMounted: () => mounted,
       onLoaded: setDeviceGroups,
+      onError: (err) => notifyError("Failed to load device groups", err),
       setLoading: setLoadingCategories
     }, deviceService.getDeviceGroups).catch(() => { });
     return () => { mounted = false; };
@@ -107,6 +109,14 @@ export const DeviceList: React.FC = () => {
     };
   }, [visibleDeviceMacs]);
 
+  useEffect(() => {
+    return eventService.on("device_busy", (busy) => {
+      setDevices((prevDevices) =>
+        prevDevices.map((device) => applyDeviceBusyUpdate(device, busy)),
+      );
+    });
+  }, []);
+
   async function handleDeviceGroupClick(group: Group) {
     sessionStorage.setItem('lastSelectedGroup', JSON.stringify(group));
 
@@ -138,6 +148,7 @@ export const DeviceList: React.FC = () => {
           setDevices(data);
         }
       },
+      onError: (err) => notifyError(`Failed to load devices: ${group.name}`, err),
       checkMounted: () => mounted && !currentController.signal.aborted
     }, () => getFunction()).catch(() => { });
     return () => { mounted = false; };
@@ -158,7 +169,7 @@ export const DeviceList: React.FC = () => {
       setSelectedDevices(new Set());
     },
       (err) => {
-        notify.error("Failed to add to group", `Failed to add device(s) to group ${group.name}: ${err}`);
+        notifyError(`Failed to add to group: ${group.name}`, err);
       });
   };
 
@@ -178,17 +189,20 @@ export const DeviceList: React.FC = () => {
     await Promise.all(macs.filter((mac) => devices.some(d => d.macAddress === mac && d.isLoggedIn)).map(async (mac) => {
       setPendingDevices((prev) => new Set(prev).add(mac));
       try {
-        return deviceService.controlDeviceSockets(mac, newState).then((updatedDevice) => {
-          if (updatedDevice) {
-            setDevices((prev) =>
-              prev.map((d) =>
-                d.macAddress === updatedDevice.macAddress
-                  ? mergeDeviceWithSocketPreserve(d, updatedDevice)
-                  : d,
-              ),
-            );
-          }
-        });
+        const updatedDevice = await deviceService.controlDeviceSockets(mac, newState);
+        if (updatedDevice) {
+          setDevices((prev) =>
+            prev.map((d) =>
+              d.macAddress === updatedDevice.macAddress
+                ? mergeDeviceWithSocketPreserve(d, updatedDevice)
+                : d,
+            ),
+          );
+        }
+      }
+      catch (err) {
+        const device = devices.find((d) => d.macAddress === mac);
+        notifyError(`Failed to switch outputs: ${device?.name || mac}`, err);
       }
       finally {
         setPendingDevices((prev) => {
@@ -213,12 +227,13 @@ export const DeviceList: React.FC = () => {
   };
 
   const handleRemoveFromGroup = async (macs: string[]) => {
-    await deviceService.removeDevicesFromGroup(loadedGroup.id, macs).then(() => {
+    try {
+      await deviceService.removeDevicesFromGroup(loadedGroup.id, macs);
       notify.success("Successful", `Device(s) removed from group ${loadedGroup.name}`);
-    },
-      (err) => {
-        notify.error("Failed to remove from group", `Failed to remove device(s) from group ${loadedGroup.name}: ${err}`);
-      });
+    } catch (err) {
+      notifyError(`Failed to remove from group: ${loadedGroup.name}`, err);
+      return; // Devices stay in the group, keep them shown
+    }
     setDevices((prev) => prev.filter((d) => !macs.includes(d.macAddress)));
     setSelectedDevices((prev) => {
       const newSet = new Set(prev);
@@ -230,7 +245,7 @@ export const DeviceList: React.FC = () => {
   const handleLocateSelected = async (macs: string[]) => {
     await deviceService.locateDevices(macs).then(() => {
       notify.success("Successful", `Devices will blink their LEDs for 1 minute, if it is supported.`);
-    });
+    }, (err) => notifyError("Locate failed", err));
   };
 
   return (
