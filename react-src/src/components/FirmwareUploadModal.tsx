@@ -6,6 +6,9 @@ import { deviceService } from '../services/deviceService';
 import { eventService } from '../services/eventService';
 import { RxExclamationTriangle, RxCheckCircled, RxCrossCircled } from "react-icons/rx";
 import { notifyError } from '../services/notificationService';
+import { createLogger } from "../services/logger";
+
+const log = createLogger("FirmwareUploadModal");
 
 interface FirmwareUploadModalProps {
   show: boolean;
@@ -46,7 +49,7 @@ export const FirmwareUploadModal: React.FC<FirmwareUploadModalProps> = ({
         setSuccessfulDevices(new Set());
       }
     } catch (err) {
-      console.debug("File selection denyed or failed:", err);
+      log.debug("File selection cancelled or failed", err);
     }
   };
 

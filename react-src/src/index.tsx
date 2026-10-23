@@ -5,6 +5,10 @@ import App from './App';
 import { init, app, events } from "@neutralinojs/lib"
 import { broadcastRaw, initTransport } from './services/neutralinoTransport';
 import { notifyError } from './services/notificationService';
+import { appService } from './services/appSerivce';
+import { configureLogger, createLogger } from './services/logger';
+
+const log = createLogger("App");
 
 import "bootstrap/dist/css/bootstrap.min.css";
 
@@ -20,22 +24,28 @@ root.render(
 init();
 initTransport();
 
+// Console logging is enabled only when the backend runs in debug mode
+appService.getLogLevel()
+  .then(({ logLevel }) => {
+    configureLogger(logLevel);
+    log.info(`Log level: ${logLevel}`);
+  })
+  .catch(() => {
+    // Backend is not reachable, console logging stays off and requests report the problem
+  });
+
 // Safety net for failed requests nobody handled
 window.addEventListener("unhandledrejection", (event) => {
   notifyError("Unexpected error", event.reason);
 });
 
-// console.log = () => { };
-// console.debug = () => { };
-// console.info = () => { };
-
 const onWindowClose = async () => {
   try {
-    console.warn("Window is closing...");
+    log.info("Window is closing");
     await broadcastRaw("windowClose");
     await app.exit();
   } catch (error) {
-    console.error("Error during window close handling:", error);
+    log.error("Error during window close handling", error);
     app.killProcess();
   }
 }

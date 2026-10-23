@@ -29,6 +29,9 @@ import {
   normalizeMac,
 } from "../../utils/deviceStateUtils";
 import { IoMdRefresh } from "react-icons/io";
+import { createLogger } from "../../services/logger";
+
+const log = createLogger("DeviceView");
 
 export const DeviceView = () => {
   const { deviceId } = useParams<{ deviceId: string }>();
@@ -51,19 +54,19 @@ export const DeviceView = () => {
   }, []);
 
   const getAllDetails = useCallback(async (id: string) => {
-    console.debug(`Loading all details for device ${id}...`);
+    log.debug(`Loading all details for device ${id}`);
     await handleLoadingAction<any>({
       setLoading: setIsLoadingDetails,
       onLoaded: (deviceInfo) => {
         setInfo(deviceInfo);
-        console.log("Device info loaded:", deviceInfo);
+        log.debug("Device info loaded", deviceInfo);
       },
       onError: (err) => notifyError(`Failed to load device details: ${id}`, err),
     }, () => deviceService.getDeviceDetails(id)).catch(() => { });
   }, []);
 
   const getDeviceDetails = useCallback(async (id: string) => {
-    console.debug(`Loading details for device ${id}...`);
+    log.debug(`Loading device ${id}`);
     await handleLoadingAction<Device>({
       setLoading: setIsLoadingDevice,
       onLoaded: async (device) => {

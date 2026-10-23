@@ -1,4 +1,7 @@
 import { BackendError } from "./BackendError";
+import { createLogger } from "./logger";
+
+const log = createLogger("Notifications");
 
 type NotificationType = "success" | "error" | "info" | "warning";
 
@@ -46,6 +49,7 @@ export const notify = new NotificationService();
  * callers pass the caught error and a title describing the failed action.
  */
 export function notifyError(title: string, err: unknown): void {
+  log.warn(title, err);
   if (err instanceof BackendError) {
     if (err.code === "DeviceBusyError") {
       notify.error("Device busy", err.message);

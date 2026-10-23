@@ -1,4 +1,7 @@
 import { EventMap, EventKey } from "../models/Events";
+import { createLogger } from "./logger";
+
+const log = createLogger("EventService");
 
 type Listener<K extends EventKey> = (data: EventMap[K]) => void;
 
@@ -18,7 +21,7 @@ class EventService {
 
     this.listeners.get(event)!.push(callback);
 
-    console.debug(`[EventService] Subscribed: ${event}`);
+    log.debug(`Subscribed: ${event}`);
     return () => this.off(event, callback);
   }
 
@@ -46,7 +49,7 @@ class EventService {
     const eventListeners = this.listeners.get(event);
 
     if (eventListeners && eventListeners.length > 0) {
-      console.debug(`[EventService] Emitting '${event}'`, data);
+      log.debug(`Emitting '${event}' to ${eventListeners.length} listener(s)`);
       eventListeners.forEach((callback) => callback(data));
     }
   }

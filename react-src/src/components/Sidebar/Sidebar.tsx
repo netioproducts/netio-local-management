@@ -2,6 +2,9 @@ import React, { JSX, useState } from "react";
 import Accordion from "react-bootstrap/Accordion";
 import Button from "react-bootstrap/Button";
 import "./Sidebar.css";
+import { createLogger } from "../../services/logger";
+
+const log = createLogger("Sidebar");
 
 interface SidebarProps {
   children: React.ReactNode;
@@ -48,7 +51,8 @@ const TopButton = ({ name, func }: TopButtonProps): JSX.Element => {
       await func();
     }
     catch (err) {
-      console.error('Error in loading:', err);
+      // The action reports its errors itself, this only keeps the button usable
+      log.debug("Top button action failed", err);
     } finally {
       setLoading(false);
     }

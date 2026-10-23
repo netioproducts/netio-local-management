@@ -28,6 +28,9 @@ import { FirmwareUploadModal } from "../../components/FirmwareUploadModal";
 import { ConfigManagementModal } from "../../components/ConfigManagementModal";
 import { FactoryResetModal } from "../../components/FactoryResetModal";
 import { eventService } from "../../services/eventService";
+import { createLogger } from "../../services/logger";
+
+const log = createLogger("DeviceList");
 import {
   applyDeviceBusyUpdate,
   applyDeviceStatusUpdate,
@@ -86,7 +89,7 @@ export const DeviceList: React.FC = () => {
         const savedGroup = JSON.parse(savedGroupStr) as Group;
         handleDeviceGroupClick(savedGroup);
       } catch (e) {
-        console.error("Failed to parse saved group from session storage", e);
+        log.warn("Failed to parse saved group from session storage", e);
       }
     }
 

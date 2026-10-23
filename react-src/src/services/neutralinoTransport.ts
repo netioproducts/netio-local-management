@@ -3,6 +3,9 @@ import { notify } from "./notificationService";
 import { eventService } from "./eventService";
 import { EventKey } from "../models/Events";
 import { BackendError } from "./BackendError";
+import { createLogger } from "./logger";
+
+const log = createLogger("Transport");
 
 const EXTENSION = "extNode"; //'extPython';
 const EVENT_REQUEST = "runNode"; //'runPython';
@@ -14,6 +17,8 @@ type PendingHandlers = {
   resolve: (v: any) => void;
   reject: (err: any) => void;
   timeout?: ReturnType<typeof setTimeout>;
+  functionName: string;
+  startedAt: number;
 };
 
 const pendingRequests = new Map<number, PendingHandlers>();
@@ -24,20 +29,28 @@ const handleResponse = (event: CustomEvent<any>) => {
   const response = event.detail; //JSON.parse(event.detail);
   const requestId = response?.requestId;
 
-  console.log("Received response:", response);
-
-  console.log("Handling response for request ID:", requestId);
-  if (requestId === undefined) return;
+  if (requestId === undefined) {
+    log.warn("Response without request ID", response);
+    return;
+  }
   const promiseHandlers = pendingRequests.get(requestId);
-  console.log("Promise handlers found:", promiseHandlers);
-  if (!promiseHandlers) return;
+  if (!promiseHandlers) {
+    log.warn(`Response #${requestId} for an unknown or timed out request`, response);
+    return;
+  }
+  const duration = Math.round(performance.now() - promiseHandlers.startedAt);
   // clear timeout if present
   if (promiseHandlers.timeout) {
     clearTimeout(promiseHandlers.timeout);
   }
   if (!response.error) {
+    log.debug(`${promiseHandlers.functionName} #${requestId} succeeded (${duration} ms)`, response.data);
     promiseHandlers.resolve(response.data);
   } else {
+    log.warn(
+      `${promiseHandlers.functionName} #${requestId} failed (${duration} ms): ${response.code}: ${response.error}`,
+      response.details,
+    );
     promiseHandlers.reject(
       new BackendError(
         response.error || "Unknown error",
@@ -45,19 +58,14 @@ const handleResponse = (event: CustomEvent<any>) => {
         response.details,
       ),
     );
-    console.log("Request resulted in error:", response.error);
   }
-  console.log("Clearing pending request for ID:", requestId);
   pendingRequests.delete(requestId);
 };
 
 const handleBackendEvent = (event: CustomEvent) => {
   const detail = event.detail;
 
-  console.log(
-    `[NeutralinoTransport] Incoming event: ${detail.type}`,
-    detail.payload,
-  );
+  log.debug(`Event ${detail?.type}`, detail?.payload);
 
   if (detail.type && detail.payload) {
     if (detail.type === "backendError") {
@@ -71,7 +79,7 @@ const handleBackendEvent = (event: CustomEvent) => {
     }
     eventService.emit(detail.type as EventKey, detail.payload);
   } else {
-    console.warn("Unknown event format from backend:", detail);
+    log.warn("Unknown event format from backend", detail);
   }
 };
 
@@ -79,7 +87,7 @@ const handleBackendEvent = (event: CustomEvent) => {
  * Initialize Neutralino transport layer.
  */
 export const initTransport = () => {
-  console.log("Init Neutralino Transport Layer...");
+  log.debug("Initializing transport");
   events.off(EVENT_RESPONSE, handleResponse);
   events.on(EVENT_RESPONSE, handleResponse);
 
@@ -103,12 +111,20 @@ export const request = (
 
   const promise = new Promise<any>((resolve, reject) => {
     // reserve entry so other code can access it
-    pendingRequests.set(requestId, { resolve, reject, timeout: undefined });
+    pendingRequests.set(requestId, {
+      resolve,
+      reject,
+      timeout: undefined,
+      functionName,
+      startedAt: performance.now(),
+    });
+    log.debug(`${functionName} #${requestId}`, params);
 
     // start timeout
     const timeoutId = setTimeout(() => {
       const handlers = pendingRequests.get(requestId);
       if (!handlers) return;
+      log.warn(`${functionName} #${requestId} timed out after ${timeoutMs} ms`);
       handlers.reject(
         new BackendError(
           `Request to ${functionName} timed out after ${timeoutMs}ms`,
@@ -129,6 +145,7 @@ export const request = (
     })
     .catch((err) => {
       const handlers = pendingRequests.get(requestId);
+      log.error(`${functionName} #${requestId} could not be sent`, err);
       if (handlers) {
         if (handlers.timeout) clearTimeout(handlers.timeout);
         handlers.reject(

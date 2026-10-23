@@ -6,6 +6,9 @@ import { handleLoadingAction } from '../../utils/asyncUtils';
 import { SocketId } from '../../models/Socket';
 import { notify, notifyError } from '../../services/notificationService';
 import { mergeDeviceWithSocketPreserve } from '../../utils/deviceStateUtils';
+import { createLogger } from '../../services/logger';
+
+const log = createLogger('DeviceListService');
 
 export const toggleDeviceSocket = async (
   id: SocketId,
@@ -43,7 +46,7 @@ export async function getDeviceGroups(): Promise<Group[]> {
     const groups: Group[] = await deviceService.getDeviceGroups();
     return groups;
   } catch (err) {
-    console.error('Failed to load device groups', err);
+    log.warn("Failed to load device groups", err);
     throw err;
   }
 }
