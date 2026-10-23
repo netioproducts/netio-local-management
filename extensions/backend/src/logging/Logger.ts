@@ -22,6 +22,16 @@ const SENSITIVE_KEYS = new Set([
 ]);
 
 const MASK = "***";
+// Sensitive values inside text, e.g. "?connectToken=abc" in an URL or "sessionId=abc" in a cookie
+const SENSITIVE_TEXT_PATTERN =
+  /\b(password|pass|token|accessToken|connectToken|nlToken|sessionId)=([^&\s;"']+)/gi;
+
+/**
+ * Masks sensitive key=value pairs in a text.
+ */
+export function maskSensitiveText(text: string): string {
+  return text.replace(SENSITIVE_TEXT_PATTERN, `$1=${MASK}`);
+}
 const TRIM_MARKER = "--- log trimmed ---\n";
 const DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024;
 
@@ -124,7 +134,7 @@ export class LogManager {
   ): void {
     if (!this.isEnabled(level)) return;
 
-    const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${module}] ${message}${formatContext(context)}\n`;
+    const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${module}] ${maskSensitiveText(message + formatContext(context))}\n`;
     this.writeLine(line);
   }
 

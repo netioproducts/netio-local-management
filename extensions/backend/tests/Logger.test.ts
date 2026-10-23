@@ -76,6 +76,20 @@ describe("Logger", () => {
     expect(content).toContain('"username":"admin"');
   });
 
+  it("masks sensitive key=value pairs in messages and error texts", () => {
+    const log = createLogger("Test", manager);
+    log.error(
+      "Connection to ws://127.0.0.1:1/?extensionId=extNode&connectToken=abc123 failed",
+    );
+    log.error("Request failed", new Error("Cookie sessionId=xyz789; rejected"));
+
+    const content = readLog();
+    expect(content).toContain("extensionId=extNode&connectToken=***");
+    expect(content).toContain("sessionId=***");
+    expect(content).not.toContain("abc123");
+    expect(content).not.toContain("xyz789");
+  });
+
   it("masks without modifying the original object and handles cycles", () => {
     const original: any = { password: "secret" };
     original.self = original;
