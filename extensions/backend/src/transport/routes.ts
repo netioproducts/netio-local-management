@@ -8,8 +8,26 @@ import { DeviceControlService } from "../services/DeviceControlService";
 import { DeviceDiscoveryService } from "../services/DeviceDiscoveryService";
 import { DeviceFileService } from "../services/DeviceFileService";
 import { DeviceEventService } from "../services/DeviceEventService";
+import { logManager } from "../logging/Logger";
 
 export type Handler = (ctx: RequestContext, data: any) => Promise<void> | void;
+
+// Routes which only read state, they are called often and logged on debug level only
+export const READ_ONLY_ROUTES = [
+  "ping",
+  "getLogLevel",
+  "getDeviceGroups",
+  "getDeviceGroupsP",
+  "getDevicesInGroup",
+  "getUsers",
+  "getUngroupedDevices",
+  "getFoundDevices",
+  "getDevice",
+  "getDeviceDetails",
+  "getDevices",
+  "subscribeToDeviceUpdates",
+  "unsubscribeFromDeviceUpdates",
+];
 
 export const createRoutes = (
   deviceService: DeviceService,
@@ -23,6 +41,9 @@ export const createRoutes = (
   return {
     ping: async (ctx, data) => {
       ctx.sendMessage({ pong: data });
+    },
+    getLogLevel: async (ctx) => {
+      ctx.sendMessage({ logLevel: logManager.level });
     },
     searchDevices: async (ctx) => {
       await deviceDiscoveryService.searchDevices();

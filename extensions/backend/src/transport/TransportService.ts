@@ -1,6 +1,9 @@
 import { ConfigService } from "../config/ConfigService";
 import NeutralinoExtension from "./NeutralinoExtension";
 import process from "process";
+import { createLogger } from "../logging/Logger";
+
+const log = createLogger("Transport");
 
 const BROADCAST_CHANNEL = "backendEvent";
 
@@ -16,16 +19,13 @@ export class TransportService {
   private ext: NeutralinoExtension;
   private messageQueue: Array<{ eventType: string; payload: any }> = [];
   private routes: Record<string, Handler> = {};
+  // Routes which only read state are logged on debug level, others on info
+  private readOnlyRoutes = new Set<string>();
 
-  private debug: boolean;
   private frontendConnected = false;
 
-  constructor(
-    private configService: ConfigService,
-    debug = true,
-  ) {
-    this.debug = debug;
-    this.ext = new NeutralinoExtension(debug);
+  constructor(private configService: ConfigService) {
+    this.ext = new NeutralinoExtension();
   }
 
   /**
@@ -37,8 +37,12 @@ export class TransportService {
     });
   }
 
-  public registerRoutes(routes: Record<string, Handler>) {
+  public registerRoutes(
+    routes: Record<string, Handler>,
+    readOnlyRoutes: string[] = [],
+  ) {
     this.routes = routes;
+    this.readOnlyRoutes = new Set(readOnlyRoutes);
   }
 
   /**
@@ -47,8 +51,8 @@ export class TransportService {
   private onFrontendConnected() {
     if (this.frontendConnected) return;
     this.frontendConnected = true;
-    console.log(
-      `[Transport] Frontend connected. Flushing ${this.messageQueue.length} queued message(s).`,
+    log.info(
+      `Frontend connected, flushing ${this.messageQueue.length} queued message(s).`,
     );
     for (const msg of this.messageQueue) {
       this.sendBroadcast(msg.eventType, msg.payload);
@@ -61,11 +65,7 @@ export class TransportService {
    */
   public broadcast(eventType: string, payload: any) {
     if (!this.frontendConnected) {
-      if (this.debug) {
-        console.log(
-          `[Transport] Queuing broadcast (frontend not connected): ${eventType}`,
-        );
-      }
+      log.debug(`Queuing broadcast (frontend not connected): ${eventType}`);
       this.messageQueue.push({ eventType, payload });
       return;
     }
@@ -76,9 +76,7 @@ export class TransportService {
    * Actually send broadcast to frontend
    */
   private sendBroadcast(eventType: string, payload: any) {
-    if (this.debug) {
-      console.log(`[Transport] Broadcasting: ${eventType}`);
-    }
+    log.debug(`Broadcasting ${eventType}`, payload);
     this.ext.sendMessage(BROADCAST_CHANNEL, {
       type: eventType,
       payload: payload,
@@ -90,7 +88,10 @@ export class TransportService {
    */
   private async handleIncomingMessage(msg: any) {
     if (msg.event !== "runNode" || !msg.data?.function) {
-      if (msg.event === "windowClose") process.exit(0);
+      if (msg.event === "windowClose") {
+        log.info("Window closed, exiting.");
+        process.exit(0);
+      }
       return;
     }
 
@@ -103,7 +104,7 @@ export class TransportService {
     const handler: Handler = this.routes[funcName];
 
     if (!handler) {
-      console.warn(`[Transport] Unknown function: ${funcName}`);
+      log.warn(`Unknown function requested: ${funcName}`);
       this.sendError(
         requestId,
         `Function '${funcName}' not found`,
@@ -125,11 +126,21 @@ export class TransportService {
     };
 
     // Execute handler
+    const logResult = this.readOnlyRoutes.has(funcName) ? log.debug : log.info;
+    const startedAt = performance.now();
+    log.debug(`Request ${funcName} #${requestId}`, params);
     try {
-      if (this.debug) console.log(`[Transport] Executing: ${funcName}`);
       await handler(context, params);
+      logResult(
+        `Request ${funcName} #${requestId} succeeded (${Math.round(performance.now() - startedAt)} ms)`,
+      );
     } catch (err) {
-      console.debug(`[Transport] Error in '${funcName}': ${String(err)}`);
+      log.warn(
+        `Request ${funcName} #${requestId} failed (${Math.round(performance.now() - startedAt)} ms): ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`,
+      );
+      if (err instanceof Error && log.isDebugEnabled()) {
+        log.debug(`Request ${funcName} #${requestId} error detail`, err);
+      }
       this.sendError(
         requestId,
         err instanceof Error ? err.message : String(err),

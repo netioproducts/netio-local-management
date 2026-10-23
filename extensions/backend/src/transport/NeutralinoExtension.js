@@ -4,16 +4,14 @@
 //
 // (c)2023-2024 Harald Schneider - marketmix.com
 
+const { createLogger } = require('../logging/Logger');
+
+const log = createLogger('NeutralinoExtension');
+
 class NeutralinoExtension {
-     constructor(debug=false) {
+     constructor() {
 
         this.version = '1.0.4';
-        this.debug = debug;
-
-        this.debugTermColors = true;             // Use terminal colors
-        this.debugTermColorIN = '\x1b[32m';      // Green: All incoming events, except function calls
-        this.debugTermColorCALL = '\x1b[91m';    // Red: Incoming function calls
-        this.debugTermColorOUT = '\x1b[33m';     // Yellow: Outgoing events
 
         if(process.argv.length > 2) {
             this.port = process.argv[2].split('=')[1];
@@ -38,7 +36,7 @@ class NeutralinoExtension {
 
         this.termOnWindowClose = true;   // Terminate on windowCloseEvent message
 
-        this.debugLog(`${this.idExtension} running on port ${this.port}`);
+        log.debug(`${this.idExtension} running on port ${this.port}`);
     }
 
     sendMessage(event, data=null) {
@@ -58,9 +56,12 @@ class NeutralinoExtension {
                 "data": data
             }
         }
-        let msg = JSON.stringify(d);
-        this.socket.send(msg);
-        this.debugLog(`${msg}`, 'out');
+        if (!this.socket || this.socket.readyState !== 1) {
+            log.warn(`Cannot send '${event}', socket to Neutralino is not open.`);
+            return;
+        }
+        this.socket.send(JSON.stringify(d));
+        log.debug('OUT', d);
     }
 
     run(onReceiveMessage) {
@@ -73,8 +74,7 @@ class NeutralinoExtension {
         let self = this;
 
         this.socket.on('open', () => {
-            console.log('WebSocket ready');
-            console.log(`Running on port ${self.port}`);
+            log.info(`Connected to Neutralino on port ${self.port}.`);
         });
 
         this.socket.on('message', (data) => {
@@ -83,11 +83,14 @@ class NeutralinoExtension {
             try {
                 msg = JSON.parse(msg);
             }
-            catch (e) {}
+            catch (e) {
+                log.warn('Received a message which is not valid JSON.');
+            }
 
             try {
                 if(self.termOnWindowClose) {
                     if(msg.event === 'windowClose' || msg.event === 'appClose') {
+                        log.info(`Received ${msg.event}, exiting.`);
                         try {
                             process.exit(0);
                         }
@@ -98,16 +101,17 @@ class NeutralinoExtension {
             }
             catch (e) {}
 
-            self.debugLog(msg, 'in');
+            log.debug('IN', msg);
             onReceiveMessage(msg);
         });
 
         this.socket.on('close', (code, reason) => {
-            console.log(`WebSocket closed: ${code} - ${reason}`);
+            log.warn(`Connection to Neutralino closed: ${code} ${reason}`);
         });
 
         this.socket.on('error', (error) => {
-            console.error(`WebSocket Error: ${error}`);
+            // ws may pass an error event instead of an Error
+            log.error(`Connection to Neutralino failed: ${(error && error.message) || error}`);
         });
     }
     isEvent(e, eventName) {
@@ -118,50 +122,6 @@ class NeutralinoExtension {
             return true;
         }
         return false;
-    }
-
-    debugLog(msg, tag='info') {
-        //
-        // Log messages to terminal.
-        // :param msg: Message string
-        // :param tag: Type of log entry
-        // :return: --
-
-        let cIN = '';
-        let cCALL = '';
-        let cOUT = '';
-        let cRST = '';
-
-        if(this.debugTermColors) {
-            cIN = this.debugTermColorIN;
-            cCALL = this.debugTermColorCALL;
-            cOUT = this.debugTermColorOUT;
-            cRST = '\x1b[0m';
-        }
-
-        if(!this.debug) {
-            return;
-        }
-
-        try {
-            msg = JSON.stringify(msg);
-        }
-        catch (e) {}
-
-        if(tag === 'in') {
-            if(msg.includes('runNode')) {
-                console.log(`${cCALL}IN:  ${msg}${cRST}`);
-            }
-            else {
-                console.log(`${cIN}IN:  ${msg}${cRST}`);
-            }
-            return;
-        }
-        if(tag === 'out') {
-            console.log(`${cOUT}OUT: ${msg}${cRST}`);
-            return;
-        }
-        //console.log(msg);
     }
 }
 
