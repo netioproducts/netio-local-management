@@ -13,10 +13,17 @@ import {
   ClientNotInitializedError,
   DeviceBusyError,
   DeviceOfflineError,
+  errorMessage,
   UnauthorizedError,
 } from "../types/Errors";
 import { RuntimeSocket } from "../types/Runtime";
 import { IDeviceClient } from "../types/IDeviceClient";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("RuntimeDevice");
+
+// Last logged connection state, used to log only changes
+type ReportedStatus = "online" | "unauthorized" | "offline";
 
 /**
  * Access to the device granted to an exclusive operation while the device is locked.
@@ -41,10 +48,42 @@ export class RuntimeDevice extends EventEmitter {
   private idleWaiters: (() => void)[] = [];
   private idleTimeout?: NodeJS.Timeout; // Timeout for idle
   private static readonly IDLE_TIMEOUT_MS = 60000;
+  private reportedStatus: ReportedStatus | null = null;
 
   constructor(device: Device) {
     super();
     this.config = device;
+  }
+
+  private get logContext(): { mac: string; ip: string } {
+    return { mac: this._config.macAddress, ip: this._config.ipAddress };
+  }
+
+  /**
+   * Logs a change of the online / login state, repeated results are not logged.
+   */
+  private reportStatus(reason?: unknown): void {
+    const status: ReportedStatus = !this.isOnline
+      ? "offline"
+      : this.isLoggedIn
+        ? "online"
+        : "unauthorized";
+    if (status === this.reportedStatus) return;
+
+    const context = {
+      ...this.logContext,
+      previous: this.reportedStatus ?? undefined,
+      reason: reason !== undefined ? errorMessage(reason) : undefined,
+    };
+    this.reportedStatus = status;
+
+    if (status === "online") {
+      log.info("Device online", context);
+    } else if (status === "unauthorized") {
+      log.info("Device reachable, login failed: wrong credentials", context);
+    } else {
+      log.info("Device offline", context);
+    }
   }
 
   public setupCredentials(
@@ -60,6 +99,8 @@ export class RuntimeDevice extends EventEmitter {
   ) {
     this._config.username = username;
     this._config.password = password;
+    this.reportedStatus = null;
+    log.debug("Credentials set up", { ...this.logContext, username });
 
     this.client = clientFactory(
       this._config.ipAddress,
@@ -78,14 +119,16 @@ export class RuntimeDevice extends EventEmitter {
     this.client.on("error", (error) => {
       this.isOnline = false;
       this.disablePolling();
-      console.error(
-        `[${this._config.macAddress}] Device communication error:`,
-        error,
-      );
+      log.warn("Device communication error", {
+        ...this.logContext,
+        reason: errorMessage(error),
+      });
+      this.reportStatus(error);
     });
 
     this.client.on("output_change", (output: NormalizedOutputStatus[]) => {
       this.isOnline = true;
+      this.reportStatus();
       for (const out of output) {
         if (this.sockets[out.id]) {
           this.sockets[out.id].state = out.state;
@@ -105,16 +148,21 @@ export class RuntimeDevice extends EventEmitter {
   }
 
   public clearCredentials(): void {
+    log.debug("Credentials cleared", this.logContext);
     this.disablePolling();
     this._config.user = undefined;
     this._config.username = undefined;
     this._config.password = undefined;
-    this.client
-      ?.disconnect()
-      .catch((err) => console.error("Failed to disconnect client", err));
+    this.client?.disconnect().catch((err) =>
+      log.warn("Failed to disconnect client", {
+        ...this.logContext,
+        reason: errorMessage(err),
+      }),
+    );
     if (this.idleTimeout) clearTimeout(this.idleTimeout);
     this.client = undefined;
     this.isLoggedIn = false;
+    this.reportedStatus = null;
   }
 
   public set config(config: Device) {
@@ -168,10 +216,38 @@ export class RuntimeDevice extends EventEmitter {
     operation: string,
     fn: (session: ExclusiveSession) => Promise<T>,
   ): Promise<T> {
+    if (this.busyOperation) {
+      log.warn("Exclusive operation rejected, device is busy", {
+        ...this.logContext,
+        operation,
+        busyOperation: this.busyOperation,
+      });
+    }
     this.assertNotBusy();
     this.lockConnection(operation);
+    log.info("Device locked for exclusive operation", {
+      ...this.logContext,
+      operation,
+    });
+    const startedAt = performance.now();
     try {
-      return await fn({ syncState: () => this.performSyncState() });
+      const result = await fn({ syncState: () => this.performSyncState() });
+      log.info("Exclusive operation finished, device unlocked", {
+        ...this.logContext,
+        operation,
+        ms: Math.round(performance.now() - startedAt),
+        ok: true,
+      });
+      return result;
+    } catch (error) {
+      log.info("Exclusive operation failed, device unlocked", {
+        ...this.logContext,
+        operation,
+        ms: Math.round(performance.now() - startedAt),
+        ok: false,
+        reason: errorMessage(error),
+      });
+      throw error;
     } finally {
       this.unlockConnection();
     }
@@ -191,14 +267,12 @@ export class RuntimeDevice extends EventEmitter {
     if (this.idleTimeout) {
       clearTimeout(this.idleTimeout);
     }
-    this.client
-      ?.stopAskingStatus()
-      .catch((err) =>
-        console.error(
-          `[${this._config.macAddress}] Failed to stop polling`,
-          err,
-        ),
-      );
+    this.client?.stopAskingStatus().catch((err) =>
+      log.warn("Failed to stop polling", {
+        ...this.logContext,
+        reason: errorMessage(err),
+      }),
+    );
   }
 
   private unlockConnection(): void {
@@ -207,14 +281,13 @@ export class RuntimeDevice extends EventEmitter {
 
     this.keepConnectionAlive();
     if (this.pollingEnabled) {
-      this.client
-        ?.startAskingStatus()
-        .catch((err) =>
-          console.error(
-            `[${this._config.macAddress}] Failed to start polling`,
-            err,
-          ),
-        );
+      log.debug("Polling resumed after exclusive operation", this.logContext);
+      this.client?.startAskingStatus().catch((err) =>
+        log.warn("Failed to start polling", {
+          ...this.logContext,
+          reason: errorMessage(err),
+        }),
+      );
     }
 
     const waiters = this.idleWaiters;
@@ -226,34 +299,38 @@ export class RuntimeDevice extends EventEmitter {
     if (this.pollingEnabled) return;
     this.pollingEnabled = true;
     // Polling is started when the running exclusive operation unlocks the device
-    if (this.busyOperation) return;
+    if (this.busyOperation) {
+      log.debug("Polling enabled, start deferred until device is unlocked", {
+        ...this.logContext,
+        busyOperation: this.busyOperation,
+      });
+      return;
+    }
 
+    log.debug("Polling enabled", this.logContext);
     if (this.idleTimeout) {
       clearTimeout(this.idleTimeout);
     }
-    this.client
-      ?.startAskingStatus()
-      .catch((err) =>
-        console.error(
-          `[${this._config.macAddress}] Failed to start polling`,
-          err,
-        ),
-      );
+    this.client?.startAskingStatus().catch((err) =>
+      log.warn("Failed to start polling", {
+        ...this.logContext,
+        reason: errorMessage(err),
+      }),
+    );
   }
 
   public disablePolling(): void {
     if (!this.pollingEnabled) return;
     this.pollingEnabled = false;
 
+    log.debug("Polling disabled", this.logContext);
     this.keepConnectionAlive();
-    this.client
-      ?.stopAskingStatus()
-      .catch((err) =>
-        console.error(
-          `[${this._config.macAddress}] Failed to stop polling`,
-          err,
-        ),
-      );
+    this.client?.stopAskingStatus().catch((err) =>
+      log.warn("Failed to stop polling", {
+        ...this.logContext,
+        reason: errorMessage(err),
+      }),
+    );
   }
 
   public get isPollingEnabled(): boolean {
@@ -298,9 +375,7 @@ export class RuntimeDevice extends EventEmitter {
 
   public getClient(): IDeviceClient {
     if (!this.client) {
-      console.error(
-        `[RuntimeDevice] Client is not initialized for device ${this._config.macAddress}`,
-      );
+      log.warn("Client is not initialized", this.logContext);
       throw new ClientNotInitializedError("Client is not initialized");
     }
     return this.client;
@@ -316,17 +391,22 @@ export class RuntimeDevice extends EventEmitter {
    */
   public async syncState(): Promise<void> {
     if (this.busyOperation) {
-      console.debug(
-        `[${this._config.macAddress}] Sync skipped, device is busy: ${this.busyOperation}.`,
-      );
+      log.debug("Sync skipped, device is busy", {
+        ...this.logContext,
+        busyOperation: this.busyOperation,
+      });
       return;
     }
     return this.performSyncState();
   }
 
   private async performSyncState(): Promise<void> {
-    if (!this.client) return;
+    if (!this.client) {
+      log.debug("Sync skipped, no credentials", this.logContext);
+      return;
+    }
 
+    const startedAt = performance.now();
     try {
       const client = this.getClient();
       await client.initialize();
@@ -372,34 +452,50 @@ export class RuntimeDevice extends EventEmitter {
       });
 
       if (changed) {
-        console.log(
-          "[RuntimeDevice] Config changed, emitting config_change event.",
-        );
+        log.debug("Device config changed, emitting config_change", {
+          ...this.logContext,
+          fwVersion: this._config.fwVersion,
+          model: this._config.model,
+          name: this._config.name,
+          sockets: this._config.sockets?.length,
+        });
         this.emit("config_change", this._config);
       }
 
-      console.log(`[${this._config.macAddress}] State synced.`);
+      log.debug("State synced", {
+        ...this.logContext,
+        ms: Math.round(performance.now() - startedAt),
+        fwVersion: fwVersionNumber,
+        outputs: outputs.length,
+      });
+      this.reportStatus();
     } catch (error) {
+      const ms = Math.round(performance.now() - startedAt);
       if (error instanceof UnauthorizedError) {
-        console.warn(
-          `[${this._config.ipAddress}] Failed to sync state, wrong credentials.`,
-        );
+        log.debug("Sync failed, wrong credentials", {
+          ...this.logContext,
+          ms,
+          reason: error.message,
+        });
         this.isOnline = true;
         this.isLoggedIn = false;
       } else if (error instanceof DeviceOfflineError) {
-        console.warn(
-          `[${this._config.ipAddress}] Failed to sync state, device is offline.`,
-        );
+        log.debug("Sync failed, device is offline", {
+          ...this.logContext,
+          ms,
+          reason: error.message,
+        });
         this.isOnline = false;
         this.isLoggedIn = false;
       } else {
-        console.error(
-          `[${this._config.ipAddress}] Failed to sync state, unknown error.`,
+        log.error(
+          `Failed to sync state of device ${this._config.ipAddress}`,
           error,
         );
         this.isOnline = false;
         this.isLoggedIn = false;
       }
+      this.reportStatus(error);
     }
   }
 
@@ -410,10 +506,10 @@ export class RuntimeDevice extends EventEmitter {
       const info = await client.getAllInfo();
       return info;
     } catch (error) {
-      console.error(
-        `[${this._config.macAddress}] Failed to get all info:`,
-        error,
-      );
+      log.warn("Failed to get all info", {
+        ...this.logContext,
+        reason: errorMessage(error),
+      });
       return null;
     }
   }
@@ -428,10 +524,16 @@ export class RuntimeDevice extends EventEmitter {
     }
 
     this.idleTimeout = setTimeout(() => {
-      console.log(`[${this._config.macAddress}] Device is idle.`);
-      this.client
-        ?.disconnect()
-        .catch((err) => console.error("Failed to disconnect client", err));
+      log.debug("Device is idle, disconnecting", {
+        ...this.logContext,
+        idleMs: RuntimeDevice.IDLE_TIMEOUT_MS,
+      });
+      this.client?.disconnect().catch((err) =>
+        log.warn("Failed to disconnect client", {
+          ...this.logContext,
+          reason: errorMessage(err),
+        }),
+      );
     }, RuntimeDevice.IDLE_TIMEOUT_MS);
   }
 
@@ -455,11 +557,19 @@ export class RuntimeDevice extends EventEmitter {
 
       this.sockets[socketIndex].state = targetState;
       this.isOnline = true;
+      log.debug("Socket state set", {
+        ...this.logContext,
+        socket: socketIndex,
+        state: targetState,
+      });
+      this.reportStatus();
     } catch (error) {
-      console.error(
-        `[${this._config.macAddress}] Failed to set socket ${socketIndex} to ${targetState}`,
-        error,
-      );
+      log.warn("Failed to set socket state, syncing state", {
+        ...this.logContext,
+        socket: socketIndex,
+        state: targetState,
+        reason: errorMessage(error),
+      });
       await this.syncState();
     }
   }
@@ -485,11 +595,18 @@ export class RuntimeDevice extends EventEmitter {
         }
       });
       this.isOnline = true;
+      log.debug("All sockets state set", {
+        ...this.logContext,
+        sockets: socketIndices.length,
+        state: targetState,
+      });
+      this.reportStatus();
     } catch (error) {
-      console.error(
-        `[${this._config.macAddress}] Failed to set all sockets to ${targetState}`,
-        error,
-      );
+      log.warn("Failed to set all sockets state, syncing state", {
+        ...this.logContext,
+        state: targetState,
+        reason: errorMessage(error),
+      });
       await this.syncState();
     }
   }

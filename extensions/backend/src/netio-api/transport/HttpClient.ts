@@ -1,6 +1,9 @@
 import { checkConnectivity } from "./univarsal";
 import * as http from "http";
 import { DeviceOfflineError, UnauthorizedError } from "../types/Errors";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("HttpClient");
 
 export class CommunicationError extends Error {
   constructor(message: string) {
@@ -52,9 +55,9 @@ export async function sendRequest(
   }
 
   const performRequest = async (shouldRetry: boolean): Promise<any> => {
+    const startedAt = performance.now();
+    const elapsedMs = () => Math.round(performance.now() - startedAt);
     try {
-      // console.debug(`Sending request to ${url} with payload`, jsonPayload);
-
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
 
@@ -81,7 +84,10 @@ export async function sendRequest(
 
         // Code 1000 = Session expired
         if (error.code === 1000 && shouldRetry) {
-          console.info("Session expired, logging in again");
+          log.warn("Session expired, logging in again", {
+            host: device.host,
+            action: command,
+          });
 
           const newSessionId = await device.login(
             device.username,
@@ -94,7 +100,11 @@ export async function sendRequest(
 
           return await performRequest(false);
         } else if (error.message === "Already logged in") {
-          console.debug("Already logged in, continuing with existing session");
+          log.debug("Already logged in, continuing with existing session", {
+            host: device.host,
+            action: command,
+            ms: elapsedMs(),
+          });
           return responseJson;
         } else if (error.code === 1004) {
           throw new UnauthorizedError(
@@ -111,14 +121,39 @@ export async function sendRequest(
         }
       }
 
+      log.debug("HTTP request", {
+        host: device.host,
+        action: command,
+        data: data ?? undefined,
+        ms: elapsedMs(),
+        ok: true,
+      });
       return responseJson;
     } catch (error: any) {
       if (
         error instanceof CommunicationError ||
         error instanceof UnauthorizedError
-      )
+      ) {
+        log.debug("HTTP request failed", {
+          host: device.host,
+          action: command,
+          data: data ?? undefined,
+          ms: elapsedMs(),
+          ok: false,
+          error: error.message,
+        });
         throw error;
-      console.error(`Cannot connect to device ${device.host}`);
+      }
+      // DeviceOfflineError comes from the nested retry or relogin, already logged
+      if (!(error instanceof DeviceOfflineError)) {
+        log.warn("HTTP request failed, device unreachable", {
+          host: device.host,
+          action: command,
+          ms: elapsedMs(),
+          timeout: error?.name === "AbortError",
+          reason: error?.message,
+        });
+      }
       throw new DeviceOfflineError(
         "Cannot connect to device: " + error.message,
       );
@@ -128,7 +163,7 @@ export async function sendRequest(
   const result = await performRequest(true);
 
   if (close) {
-    console.debug(`Closing logical session with ${url}`);
+    log.debug("Closing logical session", { host: device.host, url });
   }
 
   return result;

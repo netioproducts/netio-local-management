@@ -42,3 +42,10 @@ export class DeviceBusyError extends Error {
     this.name = "DeviceBusyError";
   }
 }
+
+/**
+ * Message of an error for log context, works for any thrown value.
+ */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

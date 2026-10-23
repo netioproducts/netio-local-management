@@ -1,7 +1,24 @@
 import WebSocket from "ws";
 import { EventEmitter } from "events";
 import { createHash, randomBytes } from "crypto";
-import { DeviceOfflineError, UnauthorizedError } from "../types/Errors";
+import {
+  DeviceOfflineError,
+  errorMessage,
+  UnauthorizedError,
+} from "../types/Errors";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("WsClient");
+
+/**
+ * Request payload for the log, file content of upload chunks is replaced by size.
+ */
+function describePayload(data: any): unknown {
+  if (data && typeof data === "object" && typeof data.b64Data === "string") {
+    return { ...data, b64Data: `[${data.b64Data.length} base64 chars]` };
+  }
+  return data;
+}
 
 export interface WsConfig {
   host: string;
@@ -67,7 +84,9 @@ export class NetioWsApi extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       const url = `ws://${this._config.host}:${this._config.port}/emweb`;
-      console.debug(`[WsApi] Connecting to ${url} (timeout: ${timeoutMs}ms)`);
+      const host = this._config.host;
+      const startedAt = performance.now();
+      log.debug("Connecting", { host, url, timeoutMs });
 
       this.ws = new WebSocket(url, {
         handshakeTimeout: timeoutMs,
@@ -77,7 +96,7 @@ export class NetioWsApi extends EventEmitter {
 
       const connectionTimeout = setTimeout(() => {
         if (!isConnected) {
-          console.warn(`[WsApi] Connection timed out after ${timeoutMs}ms`);
+          log.debug("Connection timed out", { host, timeoutMs });
           if (this.ws) {
             this.ws.removeAllListeners();
             this.ws.terminate();
@@ -94,13 +113,22 @@ export class NetioWsApi extends EventEmitter {
         isConnected = true;
         clearTimeout(connectionTimeout);
 
-        console.debug("[WsApi] Socket opened, starting handshake...");
+        log.debug("Socket opened, starting handshake", {
+          host,
+          ms: Math.round(performance.now() - startedAt),
+        });
         try {
           await this.performHandshake();
           this.startKeepAlive();
+          log.debug("Connected and authenticated", {
+            host,
+            username: this._config.username,
+            ms: Math.round(performance.now() - startedAt),
+          });
           this.emit("connected");
           resolve();
         } catch (e) {
+          log.debug("Handshake failed", { host, reason: errorMessage(e) });
           this.disconnect();
           reject(e);
         }
@@ -110,13 +138,18 @@ export class NetioWsApi extends EventEmitter {
 
       this.ws.on("error", (err) => {
         if (isConnected) {
-          console.error("[WsApi] Error:", err.message);
+          // Reported by the consumer of the "error" event
+          log.debug("Socket error", { host, reason: err.message });
           this.emit("error", err);
         } else {
           isConnected = true;
           clearTimeout(connectionTimeout);
 
-          console.warn(`[WsApi] Connect failed: ${err.message}`);
+          log.debug("Connect failed", {
+            host,
+            ms: Math.round(performance.now() - startedAt),
+            reason: err.message,
+          });
           this.ws = null; // important - clean reference
           this.cleanup();
           reject(new DeviceOfflineError(`Connect failed: ${err.message}`));
@@ -132,7 +165,11 @@ export class NetioWsApi extends EventEmitter {
           );
         }
 
-        console.debug(`[WsApi] Closed: ${code} ${reason}`);
+        log.debug("Connection closed", {
+          host,
+          code,
+          reason: reason.toString(),
+        });
         this.cleanup();
         this.emit("disconnected");
       });
@@ -141,6 +178,7 @@ export class NetioWsApi extends EventEmitter {
 
   public disconnect() {
     if (this.ws) {
+      log.debug("Disconnecting", { host: this._config.host });
       this.ws.close();
     }
     this.cleanup();
@@ -150,6 +188,12 @@ export class NetioWsApi extends EventEmitter {
     this.stopKeepAlive();
     this.ws = null;
     this.isAuthenticated = false;
+    if (this.pendingRequests.size > 0) {
+      log.debug("Rejecting pending requests, connection closed", {
+        host: this._config.host,
+        pending: this.pendingRequests.size,
+      });
+    }
     this.pendingRequests.forEach((req) => {
       clearTimeout(req.timer);
       req.reject(new WsCommunicationError("Connection closed"));
@@ -164,11 +208,14 @@ export class NetioWsApi extends EventEmitter {
     timeoutMs: number = 5000,
   ): Promise<WsMessage> {
     return new Promise((resolve, reject) => {
+      const host = this._config.host;
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        log.debug("WS request rejected, not connected", { host, type, topic });
         return reject(new WsCommunicationError("WebSocket is not connected"));
       }
 
       const reqId = this.reqIdCounter++;
+      const startedAt = performance.now();
       const msg: WsMessage = {
         type: type as any,
         reqId: reqId,
@@ -180,17 +227,59 @@ export class NetioWsApi extends EventEmitter {
       const timer = setTimeout(() => {
         if (this.pendingRequests.has(reqId)) {
           this.pendingRequests.delete(reqId);
+          log.warn("WS request timed out", {
+            host,
+            type,
+            topic,
+            reqId,
+            timeoutMs,
+          });
           reject(new WsCommunicationError(`Request timeout (reqId: ${reqId})`));
         }
       }, timeoutMs);
 
-      this.pendingRequests.set(reqId, { resolve, reject, timer });
+      this.pendingRequests.set(reqId, {
+        resolve: (reply) => {
+          log.debug("WS request", {
+            host,
+            type,
+            topic,
+            reqId,
+            data: describePayload(data),
+            ms: Math.round(performance.now() - startedAt),
+            ok: true,
+          });
+          resolve(reply);
+        },
+        reject: (err) => {
+          log.debug("WS request failed", {
+            host,
+            type,
+            topic,
+            reqId,
+            data: describePayload(data),
+            ms: Math.round(performance.now() - startedAt),
+            ok: false,
+            error: err.message,
+            code: (err as WsCommunicationError).code,
+          });
+          reject(err);
+        },
+        timer,
+      });
 
       try {
         this.ws.send(JSON.stringify(msg));
       } catch (e: any) {
         clearTimeout(timer);
         this.pendingRequests.delete(reqId);
+        log.warn("WS send failed", {
+          host,
+          type,
+          topic,
+          reqId,
+          reason: e.message,
+        });
         reject(new WsCommunicationError("Send failed: " + e.message));
       }
     });
@@ -222,12 +311,20 @@ export class NetioWsApi extends EventEmitter {
         totalChunks,
       });
 
-    console.log(
-      `[WsApi] Starting chunked upload (${fileSize} bytes in ${totalChunks} chunks)`,
-    );
+    const host = this._config.host;
+    const startedAt = performance.now();
+    log.debug("Chunked upload started", {
+      host,
+      topic,
+      uploadId,
+      bytes: fileSize,
+      chunks: totalChunks,
+      chunkSizeBytes,
+    });
 
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
       if (abortSignal?.aborted) {
+        log.debug("Chunked upload aborted", { host, uploadId, chunkIndex });
         throw new Error("Upload aborted by user.");
       }
 
@@ -253,21 +350,24 @@ export class NetioWsApi extends EventEmitter {
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         if (abortSignal?.aborted) {
+          log.debug("Chunked upload aborted", { host, uploadId, chunkIndex });
           throw new Error("Upload aborted by user.");
         }
 
         try {
-          console.debug(
-            `[WsApi] Uploading chunk ${chunkIndex + 1}/${totalChunks} (bytes ${bytesFrom}-${bytesTo}) attempt ${attempt}`,
-          );
           await this.sendRequest("SET", topic, payload, TIMEOUT_MS);
           lastError = null;
           break;
         } catch (err: any) {
-          console.warn(
-            `[WsApi] Error uploading chunk ${chunkIndex + 1}, attempt ${attempt}:`,
-            err.message,
-          );
+          log.warn("Chunk upload failed", {
+            host,
+            uploadId,
+            chunk: chunkIndex + 1,
+            chunks: totalChunks,
+            attempt,
+            maxAttempts: MAX_RETRIES,
+            reason: err.message,
+          });
           lastError = err;
         }
       }
@@ -284,6 +384,13 @@ export class NetioWsApi extends EventEmitter {
           totalChunks,
         });
     }
+
+    log.debug("Chunked upload finished", {
+      host,
+      uploadId,
+      bytes: fileSize,
+      ms: Math.round(performance.now() - startedAt),
+    });
   }
 
   private async performHandshake(): Promise<void> {
@@ -304,6 +411,11 @@ export class NetioWsApi extends EventEmitter {
     const authResp = await this.sendSpecificAuthRequest(authPayload);
 
     if (authResp.status !== "OK") {
+      log.debug("Authentication rejected", {
+        host: this._config.host,
+        username: this._config.username,
+        status: authResp.status,
+      });
       throw new UnauthorizedError("Authentication failed");
     }
 
@@ -316,6 +428,8 @@ export class NetioWsApi extends EventEmitter {
   }): Promise<WsMessage> {
     return new Promise((resolve, reject) => {
       const reqId = this.reqIdCounter++;
+      const host = this._config.host;
+      const startedAt = performance.now();
       const msg = {
         type: "AUTH",
         reqId: reqId,
@@ -324,10 +438,41 @@ export class NetioWsApi extends EventEmitter {
 
       const timer = setTimeout(() => {
         this.pendingRequests.delete(reqId);
+        log.warn("WS authentication timed out", {
+          host,
+          reqId,
+          timeoutMs: 5000,
+        });
         reject(new WsCommunicationError("Auth timeout"));
       }, 5000);
 
-      this.pendingRequests.set(reqId, { resolve, reject, timer });
+      this.pendingRequests.set(reqId, {
+        resolve: (reply) => {
+          log.debug("WS request", {
+            host,
+            type: "AUTH",
+            reqId,
+            username: payload.username,
+            ms: Math.round(performance.now() - startedAt),
+            ok: true,
+          });
+          resolve(reply);
+        },
+        reject: (err) => {
+          log.debug("WS request failed", {
+            host,
+            type: "AUTH",
+            reqId,
+            username: payload.username,
+            ms: Math.round(performance.now() - startedAt),
+            ok: false,
+            error: err.message,
+            code: (err as WsCommunicationError).code,
+          });
+          reject(err);
+        },
+        timer,
+      });
       this.ws!.send(JSON.stringify(msg));
     });
   }
@@ -354,14 +499,14 @@ export class NetioWsApi extends EventEmitter {
     try {
       msg = JSON.parse(rawData.toString());
     } catch (e) {
-      console.warn("[WsApi] Invalid JSON received");
+      log.warn("Invalid JSON received", {
+        host: this._config.host,
+        bytes: rawData.toString().length,
+      });
       return;
     }
 
     if (msg.reqId !== undefined && this.pendingRequests.has(msg.reqId)) {
-      console.debug(
-        `[WsApi] Received response for request ${msg.reqId}, ${JSON.stringify(msg.data)}`,
-      );
       const req = this.pendingRequests.get(msg.reqId)!;
       clearTimeout(req.timer);
       this.pendingRequests.delete(msg.reqId);
@@ -379,6 +524,12 @@ export class NetioWsApi extends EventEmitter {
       return;
     }
 
+    log.debug("WS event", {
+      host: this._config.host,
+      type: msg.type,
+      topic: msg.topic,
+      reqId: msg.reqId,
+    });
     this.emit("message", msg);
   }
 
@@ -386,6 +537,7 @@ export class NetioWsApi extends EventEmitter {
     this.stopKeepAlive();
     this.keepAliveInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        log.debug("Keep-alive ping", { host: this._config.host });
         this.ws.ping();
       }
     }, 30000);

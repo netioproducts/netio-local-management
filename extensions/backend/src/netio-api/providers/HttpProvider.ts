@@ -7,6 +7,10 @@ import {
 import { EventEmitter } from "events";
 import * as HttpClient from "../transport/HttpClient";
 import { checkConnectivity, sendFile } from "../transport/univarsal";
+import { errorMessage } from "../types/Errors";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("HttpProvider");
 
 export class HttpProvider
   extends EventEmitter
@@ -47,6 +51,7 @@ export class HttpProvider
       password: pass,
     });
     this.sessionId = resp.data.sessionId;
+    log.debug("Logged in", { host: this.host, username: user });
     return this.sessionId!;
   }
 
@@ -61,7 +66,13 @@ export class HttpProvider
     this.stopOutputStatusPolling();
 
     if (this.sessionId) {
-      HttpClient.sendRequest(this, "logout").catch(() => {});
+      log.debug("Logging out", { host: this.host });
+      HttpClient.sendRequest(this, "logout").catch((error) =>
+        log.debug("Logout failed", {
+          host: this.host,
+          reason: errorMessage(error),
+        }),
+      );
       this.sessionId = null;
     }
   }
@@ -145,7 +156,10 @@ export class HttpProvider
     await this.connect();
     await this.stopAskingStatus();
 
-    console.log(`[HttpProvider] Preparing for firmware upgrade...`);
+    log.debug("Preparing firmware upgrade", {
+      host: this.host,
+      bytes: fileBuffer.length,
+    });
     onProgress && onProgress(1, "Preparing...");
     await HttpClient.sendRequest(this, "prepFwUpgrade");
 
@@ -178,7 +192,7 @@ export class HttpProvider
       clearInterval(progressTimer);
     }
 
-    console.log(`[HttpProvider] Starting firmware upgrade (startUpgrade)...`);
+    log.debug("Firmware file uploaded, starting upgrade", { host: this.host });
     onProgress && onProgress(80, "Starting...");
     const res = await HttpClient.sendRequest(this, "startUpgrade");
   }
@@ -189,7 +203,10 @@ export class HttpProvider
   ): Promise<void> {
     await this.connect();
 
-    console.log(`[HttpProvider] Importing configuration...`);
+    log.debug("Importing configuration", {
+      host: this.host,
+      bytes: fileBuffer.length,
+    });
     onProgress && onProgress(1, "Uploading...");
 
     await sendFile(
@@ -202,18 +219,19 @@ export class HttpProvider
     );
 
     onProgress && onProgress(100, "Done...");
-    console.log(`[HttpProvider] Configuration imported successfully.`);
+    log.debug("Configuration imported", { host: this.host });
   }
 
   public async exportConfig(): Promise<any> {
     await this.connect();
 
-    console.log(`[HttpProvider] Exporting configuration...`);
     const protocol = this.useHttps ? "https" : "http";
     const url = `${protocol}://${this.host}/files/config.json`;
+    log.debug("Exporting configuration", { host: this.host, url });
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const startedAt = performance.now();
 
     try {
       const response = await fetch(url, {
@@ -224,6 +242,11 @@ export class HttpProvider
         signal: controller.signal,
       });
 
+      log.debug("Configuration export response", {
+        host: this.host,
+        status: response.status,
+        ms: Math.round(performance.now() - startedAt),
+      });
       if (!response.ok) {
         throw new Error(`HTTP Error: ${response.status}`);
       }
@@ -245,6 +268,10 @@ export class HttpProvider
   private startOutputStatusPolling(): void {
     this.stopOutputStatusPolling();
 
+    log.debug("Output status polling started", {
+      host: this.host,
+      intervalMs: HttpProvider.OUTPUT_STATUS_POLL_MS,
+    });
     this.outputStatusPollTimer = setInterval(() => {
       void this.pollOutputStatusList();
     }, HttpProvider.OUTPUT_STATUS_POLL_MS);
@@ -256,6 +283,7 @@ export class HttpProvider
     if (this.outputStatusPollTimer) {
       clearInterval(this.outputStatusPollTimer);
       this.outputStatusPollTimer = undefined;
+      log.debug("Output status polling stopped", { host: this.host });
     }
     this.outputStatusPollInFlight = false;
   }
@@ -286,6 +314,11 @@ export class HttpProvider
       this.emit("error", error);
       return;
     }
+
+    log.debug("Received error without listeners", {
+      host: this.host,
+      reason: errorMessage(error),
+    });
   }
 
   private parseOutputStatusList(outputs: unknown): NormalizedOutputStatus[] {

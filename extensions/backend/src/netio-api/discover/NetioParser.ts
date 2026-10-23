@@ -1,4 +1,7 @@
 import { Buffer } from "buffer";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("NetioParser");
 
 export interface DeviceInfo {
   fwversion?: string;
@@ -25,7 +28,10 @@ export class NetioParser {
       : Buffer.from(data, "binary");
 
     if (binarydata[0] !== 0x02) {
-      console.log("Data are not valid");
+      log.debug("Discovery response is not valid, unexpected header", {
+        firstByte: binarydata[0],
+        bytes: binarydata.length,
+      });
       return {};
     }
 
@@ -106,6 +112,13 @@ export class NetioParser {
       }
     }
 
+    log.debug("Discovery response parsed", {
+      ip: device.ip,
+      mac: device.mac,
+      fwVersion: device.fwversion,
+      model: device.model,
+      params: params.length,
+    });
     return device;
   }
 }

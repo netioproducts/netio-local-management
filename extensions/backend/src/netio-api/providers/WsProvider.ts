@@ -7,6 +7,10 @@ import {
 import { EventEmitter } from "events";
 import { NetioWsApi } from "../transport/WsClient";
 import { checkConnectivity, sendFile } from "../transport/univarsal";
+import { errorMessage } from "../types/Errors";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("WsProvider");
 
 interface OutputCacheItem extends NormalizedOutputStatus {
   name: string;
@@ -47,8 +51,12 @@ export class WsProvider extends EventEmitter implements INetioProvider {
     this.processOutputList(outputListReply.data);
     this.processOutputMeasure(outputMeasureReply.data);
 
-    console.log("[WsProvider] Connected and initial data received.");
-    console.log("[WsProvider] System Info:", this.systemInfoCache);
+    log.debug("Subscribed, initial data received", {
+      host: this.api.config.host,
+      model: this.systemInfoCache.model,
+      fwVersion: this.systemInfoCache.firmwareVersion,
+      outputs: this.outputsCache.size,
+    });
   }
 
   public disconnect(): void {
@@ -79,6 +87,11 @@ export class WsProvider extends EventEmitter implements INetioProvider {
         }
         return res.data;
       } catch (err) {
+        log.debug("Subscription failed, topic skipped", {
+          host: this.api.config.host,
+          topic,
+          reason: errorMessage(err),
+        });
         return null;
       }
     };
@@ -131,7 +144,10 @@ export class WsProvider extends EventEmitter implements INetioProvider {
   ): Promise<void> {
     await this.api.connect();
 
-    console.log(`[WsProvider] Getting upload path (SET system/fwupdate)...`);
+    log.debug("Requesting firmware upload", {
+      host: this.api.config.host,
+      bytes: fileBuffer.length,
+    });
     onProgress && onProgress(0, "Preparing...");
     const response = await this.api.sendRequest("SET", "system/fwupdate", {});
 
@@ -141,6 +157,11 @@ export class WsProvider extends EventEmitter implements INetioProvider {
     const step = 80 / (expectedDurationMs / updateIntervalMs);
 
     if (response.data.uploadPath) {
+      log.debug("Uploading firmware over HTTP", {
+        host: this.api.config.host,
+        uploadPath: response.data.uploadPath,
+        bytes: fileBuffer.length,
+      });
       const progressTimer = setInterval(() => {
         simulatedProgress += step;
         if (simulatedProgress >= 80) {
@@ -164,6 +185,11 @@ export class WsProvider extends EventEmitter implements INetioProvider {
         clearInterval(progressTimer);
       }
     } else if (response.data.uploadId !== undefined) {
+      log.debug("Uploading firmware over WebSocket chunks", {
+        host: this.api.config.host,
+        uploadId: response.data.uploadId,
+        bytes: fileBuffer.length,
+      });
       await this.api.uploadFile(
         fileBuffer,
         "upload/chunk",
@@ -181,7 +207,7 @@ export class WsProvider extends EventEmitter implements INetioProvider {
     }
 
     onProgress && onProgress(80, "Starting...");
-    console.log(`[WsProvider] File uploaded successfully.`);
+    log.debug("Firmware file uploaded", { host: this.api.config.host });
   }
 
   public async importConfig(
@@ -190,10 +216,19 @@ export class WsProvider extends EventEmitter implements INetioProvider {
   ): Promise<void> {
     await this.api.connect();
 
+    log.debug("Requesting configuration import", {
+      host: this.api.config.host,
+      bytes: fileBuffer.length,
+    });
     onProgress && onProgress(0, "Preparing...");
     const response = await this.api.sendRequest("SET", "system/cfgimport", {});
 
     if (response.data.uploadPath) {
+      log.debug("Uploading configuration over HTTP", {
+        host: this.api.config.host,
+        uploadPath: response.data.uploadPath,
+        bytes: fileBuffer.length,
+      });
       let simulatedProgress = 1;
       const expectedDurationMs = 15000;
       const updateIntervalMs = 2000;
@@ -222,6 +257,11 @@ export class WsProvider extends EventEmitter implements INetioProvider {
         clearInterval(progressTimer);
       }
     } else if (response.data.uploadId !== undefined) {
+      log.debug("Uploading configuration over WebSocket chunks", {
+        host: this.api.config.host,
+        uploadId: response.data.uploadId,
+        bytes: fileBuffer.length,
+      });
       await this.api.uploadFile(
         fileBuffer,
         "upload/chunk",
@@ -239,7 +279,7 @@ export class WsProvider extends EventEmitter implements INetioProvider {
     }
 
     onProgress && onProgress(100, "Done...");
-    console.log(`[WsProvider] Configuration imported successfully.`);
+    log.debug("Configuration imported", { host: this.api.config.host });
   }
 
   private isVersion52OrHigher(version: string): boolean {
@@ -261,6 +301,10 @@ export class WsProvider extends EventEmitter implements INetioProvider {
     }
 
     if (this.isVersion52OrHigher(this.systemInfoCache.firmwareVersion || "")) {
+      log.debug("Exporting configuration by export/config topics", {
+        host: this.api.config.host,
+        fwVersion: this.systemInfoCache.firmwareVersion,
+      });
       const EXPORT_TOPICS = [
         "export/config/inputs",
         "export/config/network",
@@ -290,12 +334,20 @@ export class WsProvider extends EventEmitter implements INetioProvider {
             }
           }
         } catch (e) {
-          console.warn(`[WsProvider] Failed to export topic ${topic}`, e);
+          log.warn("Failed to export configuration topic", {
+            host: this.api.config.host,
+            topic,
+            reason: errorMessage(e),
+          });
         }
       }
       return { config: assembledConfig };
     }
 
+    log.debug("Exporting configuration by system/cfgexport", {
+      host: this.api.config.host,
+      fwVersion: this.systemInfoCache.firmwareVersion,
+    });
     const response = await this.api.sendRequest("SET", "system/cfgexport", {});
 
     if (response && response.data && response.data.config) {
@@ -303,14 +355,18 @@ export class WsProvider extends EventEmitter implements INetioProvider {
         try {
           return JSON.parse(response.data.config);
         } catch (e) {
+          log.debug("Exported configuration is not valid JSON, cleaning up", {
+            host: this.api.config.host,
+            reason: errorMessage(e),
+          });
           try {
             // Workaround for NETIO firmware bug where it exports invalid JSON like '{"config":{,"schedules":...'
             const cleanedStr = response.data.config.replace(/{\s*,/g, "{");
             return JSON.parse(cleanedStr);
           } catch (e2) {
-            console.warn(
-              "[WsProvider] Failed to parse exported config even after cleanup:",
-              e2,
+            log.warn(
+              "Failed to parse exported configuration even after cleanup",
+              { host: this.api.config.host, reason: errorMessage(e2) },
             );
             return response.data.config;
           }
@@ -400,7 +456,10 @@ export class WsProvider extends EventEmitter implements INetioProvider {
       return;
     }
 
-    console.warn("[WsProvider] Received error without listeners:", error);
+    log.warn("Received error without listeners", {
+      host: this.api.config.host,
+      reason: errorMessage(error),
+    });
   }
 
   public async factoryReset(): Promise<void> {

@@ -22,14 +22,11 @@ export class DeviceEventService {
 
   public onBusyChange = (status: DeviceBusyDTO) => {
     // Not throttled nor filtered by visibility, lock changes are rare
-    if (status.busyOperation) {
-      log.info("Device locked", {
-        mac: status.macAddress,
-        operation: status.busyOperation,
-      });
-    } else {
-      log.info("Device unlocked", { mac: status.macAddress });
-    }
+    // Lock and unlock are logged on info by RuntimeDevice.runExclusive
+    log.debug("Broadcasting busy change", {
+      mac: status.macAddress,
+      busyOperation: status.busyOperation,
+    });
     this.transportService.broadcast("device_busy", status);
   };
 

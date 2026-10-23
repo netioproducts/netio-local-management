@@ -3,6 +3,10 @@ import * as os from "os";
 import { exec, execFile } from "child_process";
 
 import { DeviceInfo, NetioParser } from "./NetioParser";
+import { errorMessage } from "../types/Errors";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("DiscoverNetio");
 
 export interface DeviceResult {
   ip: string;
@@ -50,13 +54,15 @@ export class DiscoverNetio {
     timeoutMs: number = 3000,
   ): Promise<DeviceResult[]> {
     let foundDevices: DeviceResult[] = [];
+    const startedAt = performance.now();
+    log.debug("Discovery started", { timeoutMs });
     try {
       foundDevices = await this.performScan(payload, timeoutMs);
-      console.log(
-        `[DiscoverNetio] Initial scan found ${foundDevices.length} device(s).`,
-      );
+      log.info("UDP broadcast scan finished", {
+        devices: foundDevices.length,
+      });
     } catch (error: any) {
-      console.warn(`[DiscoverNetio] Broadcast scan failed:`, error.message);
+      log.warn("UDP broadcast scan failed", { reason: errorMessage(error) });
     }
 
     // If no devices found on Linux and we haven't tried fixing firewall yet
@@ -65,37 +71,48 @@ export class DiscoverNetio {
       process.platform === "linux" &&
       !this.firewallFixAttempted
     ) {
-      console.log(
-        "[DiscoverNetio] No devices found. Attempting to open firewall ports...",
-      );
+      log.info("No devices found, trying to open firewall ports", {
+        ports: [this.LISTEN_PORT, this.PUBLISH_PORT],
+      });
       this.firewallFixAttempted = true;
 
       try {
         await allowPortOnLinux();
 
-        console.log("[DiscoverNetio] Firewall ports opened. Retrying scan...");
+        log.info("Firewall ports opened, retrying UDP broadcast scan");
         foundDevices = await this.performScan(payload, timeoutMs);
+        log.info("UDP broadcast scan finished", {
+          devices: foundDevices.length,
+          retry: true,
+        });
       } catch (error) {
-        console.warn("[DiscoverNetio] Failed to open firewall ports:", error);
+        log.warn("Failed to open firewall ports or retry the scan", {
+          reason: errorMessage(error),
+        });
       }
     }
 
     if (foundDevices.length === 0) {
-      console.log(
-        "[DiscoverNetio] No devices found via broadcast. Trying ping sweep fallback...",
-      );
+      log.info("No devices found via UDP broadcast, trying ping sweep");
       const fallbackDevices = await this.performPingSweepFallback(
         payload,
         timeoutMs,
       );
       if (fallbackDevices.length > 0) {
+        log.info("Discovery finished", {
+          method: "ping sweep",
+          devices: fallbackDevices.length,
+          ms: Math.round(performance.now() - startedAt),
+        });
         return fallbackDevices;
       }
     }
 
-    console.log(
-      `[DiscoverNetio] Discovery complete. Total devices found: ${foundDevices.length}.`,
-    );
+    log.info("Discovery finished", {
+      method: foundDevices.length > 0 ? "UDP broadcast" : "none",
+      devices: foundDevices.length,
+      ms: Math.round(performance.now() - startedAt),
+    });
     return foundDevices;
   }
 
@@ -120,6 +137,10 @@ export class DiscoverNetio {
         this.socket.on("message", (msg, rinfo) => {
           const exists = foundDevices.some((d) => d.ip === rinfo.address);
           if (!exists) {
+            log.debug("UDP discovery response", {
+              ip: rinfo.address,
+              bytes: msg.length,
+            });
             foundDevices.push({
               ip: rinfo.address,
               rawMessage: msg,
@@ -129,6 +150,7 @@ export class DiscoverNetio {
         });
 
         this.socket.on("error", (err) => {
+          log.debug("UDP socket error", { reason: err.message });
           this.cleanup();
           reject(err);
         });
@@ -136,6 +158,7 @@ export class DiscoverNetio {
         this.socket.bind(this.LISTEN_PORT, "0.0.0.0", () => {
           if (!this.socket) return;
           this.socket.setBroadcast(true);
+          log.debug("UDP socket bound", { port: this.LISTEN_PORT });
 
           if (targets && targets.length > 0) {
             this.sendToTargets(payload, targets);
@@ -161,22 +184,23 @@ export class DiscoverNetio {
   ): Promise<DeviceResult[]> {
     const sweepTargets = this.getSweepTargets();
     if (sweepTargets.length === 0) {
+      log.info("Ping sweep skipped, no suitable network interface");
       return [];
     }
 
-    console.log(
-      `[DiscoverNetio] Ping sweep will check ${sweepTargets.length} host(s).`,
-    );
+    log.debug("Ping sweep started", { hosts: sweepTargets.length });
+    const startedAt = performance.now();
     const responsiveTargets = await this.pingSweep(sweepTargets);
 
+    log.info("Ping sweep finished", {
+      hosts: sweepTargets.length,
+      responsive: responsiveTargets.length,
+      ms: Math.round(performance.now() - startedAt),
+    });
     if (responsiveTargets.length === 0) {
-      console.log("[DiscoverNetio] Ping sweep found no responsive hosts.");
       return [];
     }
 
-    console.log(
-      `[DiscoverNetio] Ping sweep found ${responsiveTargets.length} responsive host(s). Verifying NETIO API...`,
-    );
     return this.discoverByApi(responsiveTargets, timeoutMs);
   }
 
@@ -205,9 +229,10 @@ export class DiscoverNetio {
     );
 
     await Promise.all(workers);
-    console.log(
-      `[DiscoverNetio] API verification found ${foundDevices.length} NETIO device(s).`,
-    );
+    log.info("NETIO API verification finished", {
+      hosts: targets.length,
+      devices: foundDevices.length,
+    });
 
     return foundDevices;
   }
@@ -221,10 +246,12 @@ export class DiscoverNetio {
     try {
       response = await this.fetchNetioVersion(host, timeoutMs);
     } catch (_err) {
+      log.debug("API probe failed", { host, reason: errorMessage(_err) });
       return null;
     }
 
     if (!this.looksLikeNetioResponse(response)) {
+      log.debug("API probe skipped, not a NETIO response", { host });
       return null;
     }
 
@@ -234,8 +261,9 @@ export class DiscoverNetio {
     );
 
     if (!resolvedMac || !data.version) {
-      console.debug(
-        `[DiscoverNetio] Skipping ${host}: NETIO API responded but required fields are missing.`,
+      log.debug(
+        "API probe skipped, NETIO API responded but required fields are missing",
+        { host, hasMac: !!resolvedMac, hasVersion: !!data.version },
       );
       return null;
     }
@@ -249,6 +277,11 @@ export class DiscoverNetio {
       variant: data.variant,
     };
 
+    log.debug("NETIO device found by API probe", {
+      host,
+      mac: resolvedMac,
+      fwVersion: data.version,
+    });
     return {
       ip: host,
       rawMessage: Buffer.from(JSON.stringify(response), "utf-8"),
@@ -352,12 +385,13 @@ export class DiscoverNetio {
     if (!this.socket) return;
     const message = payload;
     const targets = this.getBroadcastAddresses();
+    log.debug("Sending UDP broadcast", { targets, port: this.PUBLISH_PORT });
 
     targets.forEach((ip) => {
       try {
         this.socket?.send(message, 0, message.length, this.PUBLISH_PORT, ip);
       } catch (e) {
-        console.error(`Send error ${ip}:`, e);
+        log.warn("UDP send failed", { ip, reason: errorMessage(e) });
       }
     });
   }
@@ -365,12 +399,16 @@ export class DiscoverNetio {
   private sendToTargets(payload: Buffer, targets: string[]) {
     if (!this.socket) return;
     const message = payload;
+    log.debug("Sending UDP discovery to targets", {
+      targets: targets.length,
+      port: this.PUBLISH_PORT,
+    });
 
     targets.forEach((ip) => {
       try {
         this.socket?.send(message, 0, message.length, this.PUBLISH_PORT, ip);
       } catch (e) {
-        console.error(`Send error ${ip}:`, e);
+        log.warn("UDP send failed", { ip, reason: errorMessage(e) });
       }
     });
   }
@@ -412,9 +450,12 @@ export class DiscoverNetio {
             !this.pingCommandMissingLogged
           ) {
             this.pingCommandMissingLogged = true;
-            console.warn(
-              "[DiscoverNetio] 'ping' command is not available. Ping sweep fallback is disabled.",
+            log.warn(
+              "'ping' command is not available, ping sweep fallback is disabled",
             );
+          }
+          if (!error) {
+            log.debug("Host responded to ping", { host });
           }
           resolve(!error);
         },
@@ -460,11 +501,22 @@ export class DiscoverNetio {
         }
 
         if (hostCount > this.MAX_SWEEP_HOSTS_PER_INTERFACE) {
-          console.warn(
-            `[DiscoverNetio] Skipping interface ${ifaceName}: ${hostCount} hosts exceeds limit ${this.MAX_SWEEP_HOSTS_PER_INTERFACE}.`,
-          );
+          log.warn("Ping sweep skips interface, too many hosts", {
+            iface: ifaceName,
+            address: details.address,
+            netmask: details.netmask,
+            hosts: hostCount,
+            limit: this.MAX_SWEEP_HOSTS_PER_INTERFACE,
+          });
           return;
         }
+
+        log.debug("Ping sweep interface", {
+          iface: ifaceName,
+          address: details.address,
+          netmask: details.netmask,
+          hosts: hostCount,
+        });
 
         for (let hostInt = network + 1; hostInt < broadcast; hostInt += 1) {
           if (hostInt === ipInt) continue;
@@ -512,6 +564,12 @@ export class DiscoverNetio {
           );
 
           targets.push(broadcastParts.join("."));
+          log.debug("Broadcast interface", {
+            iface: ifaceName,
+            address: details.address,
+            netmask: details.netmask,
+            broadcast: broadcastParts.join("."),
+          });
         }
       });
     });
@@ -541,13 +599,16 @@ export function allowPortOnLinux() {
 
     exec(cmd, (error, stdout, stderr) => {
       if (error) {
-        console.error(
-          "User denied permission or firewall doesn't exist:",
-          error,
-        );
+        // Reported by the caller, only details here
+        log.debug("User denied permission or no supported firewall found", {
+          code: error.code,
+          stderr: stderr?.toString().trim(),
+        });
         reject(error);
       } else {
-        console.log("Ports 62386 and 62387 successfully allowed.");
+        log.debug("Ports 62386 and 62387 allowed", {
+          stdout: stdout?.toString().trim(),
+        });
         resolve(true);
       }
     });

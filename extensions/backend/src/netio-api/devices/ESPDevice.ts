@@ -7,8 +7,11 @@ import {
 import { HttpProvider } from "../providers/HttpProvider";
 import { WsProvider } from "../providers/WsProvider";
 import { getBasicDeviceInfo } from "../transport/univarsal";
-import { MacAddressMismatchError } from "../types/Errors";
+import { errorMessage, MacAddressMismatchError } from "../types/Errors";
 import { IDeviceClient } from "../types/IDeviceClient";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("ESPDevice");
 
 export type ProtocolType = "http" | "ws";
 interface INetioDeviceConnection {
@@ -34,7 +37,10 @@ export class ESPDevice extends EventEmitter implements IDeviceClient {
 
   public async connectOnly(): Promise<void> {
     try {
-      console.log(`[${this.config.ipAddress}] Trying WS...`);
+      log.debug("Trying WebSocket", {
+        ip: this.config.ipAddress,
+        mac: this.config.macAddress,
+      });
       const wsProvider = new WsProvider(
         this.config.ipAddress,
         this.config.username,
@@ -45,10 +51,18 @@ export class ESPDevice extends EventEmitter implements IDeviceClient {
 
       this.provider = wsProvider;
       this.protocol = "ws";
-      console.log(`[${this.config.ipAddress}] Connected via WS.`);
+      log.info("Connected via WebSocket", {
+        ip: this.config.ipAddress,
+        mac: this.config.macAddress,
+        protocol: this.protocol,
+      });
       this.setupEvents();
     } catch (wsError: any) {
-      console.log(`[${this.config.ipAddress}] Trying HTTP...`);
+      log.warn("WebSocket connection failed, falling back to HTTP", {
+        ip: this.config.ipAddress,
+        mac: this.config.macAddress,
+        reason: errorMessage(wsError),
+      });
 
       const httpProvider = new HttpProvider(
         this.config.ipAddress,
@@ -61,7 +75,12 @@ export class ESPDevice extends EventEmitter implements IDeviceClient {
 
       this.provider = httpProvider;
       this.protocol = "http";
-      console.log(`[${this.config.ipAddress}] Connected via HTTP.`);
+      log.info("Connected via HTTP", {
+        ip: this.config.ipAddress,
+        mac: this.config.macAddress,
+        protocol: this.protocol,
+        https: this.useHttps,
+      });
       this.setupEvents();
     }
   }
@@ -91,13 +110,31 @@ export class ESPDevice extends EventEmitter implements IDeviceClient {
       this.emit("error", error);
       return;
     }
+
+    log.debug("Received error without listeners", {
+      ip: this.config.ipAddress,
+      mac: this.config.macAddress,
+      reason: errorMessage(error),
+    });
   }
 
   public async disconnect() {
+    if (this.provider) {
+      log.debug("Disconnecting", {
+        ip: this.config.ipAddress,
+        mac: this.config.macAddress,
+        protocol: this.protocol,
+      });
+    }
     this.provider?.disconnect();
   }
 
   public async reconnect(): Promise<void> {
+    log.debug("Reconnecting, protocol will be detected again", {
+      ip: this.config.ipAddress,
+      mac: this.config.macAddress,
+      protocol: this.protocol,
+    });
     await this.disconnect();
     this.provider = undefined;
     this.protocol = undefined;

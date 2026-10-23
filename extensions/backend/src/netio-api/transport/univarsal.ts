@@ -1,6 +1,9 @@
-import { BadResponseError } from "../types/Errors";
+import { BadResponseError, errorMessage } from "../types/Errors";
 import { INetioDevice } from "./HttpClient";
 import * as http from "http";
+import { createLogger } from "../../logging/Logger";
+
+const log = createLogger("univarsal");
 
 export async function checkConnectivity(
   device: { host: string },
@@ -23,9 +26,21 @@ export async function checkConnectivity(
     const end = performance.now();
     const durationSec = (end - start) / 1000;
 
+    log.debug("Connectivity check", {
+      host: device.host,
+      ms: Math.round(end - start),
+      status: response.status,
+      ok: true,
+    });
     return durationSec;
   } catch (error) {
-    console.warn(`Couldn't connect to device ${device.host}.`);
+    // Expected while a device reboots, the caller decides what it means
+    log.debug("Connectivity check failed", {
+      host: device.host,
+      timeoutSec,
+      ok: false,
+      reason: errorMessage(error),
+    });
 
     return -1;
   }
@@ -53,6 +68,7 @@ export async function getBasicDeviceInfo(
   const start = performance.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
+  let result = "ok";
 
   try {
     const response = await fetch(url, {
@@ -64,6 +80,7 @@ export async function getBasicDeviceInfo(
       signal: controller.signal,
     });
     if (!response.ok) {
+      result = `HTTP ${response.status}`;
       return Promise.reject(
         new BadResponseError(
           `Failed to get device info: ${response.statusText}`,
@@ -72,17 +89,24 @@ export async function getBasicDeviceInfo(
     }
     const res = await response.json();
     if (!res || !res.data || !res.data.deviceSN) {
+      result = "invalid response format";
       return Promise.reject(new BadResponseError("Invalid response format"));
     }
     return res as BasicInfo;
   } catch (err) {
+    result = errorMessage(err);
     throw err;
   } finally {
     clearTimeout(timeoutId);
 
     const end = performance.now();
-    const durationSec = (end - start) / 1000;
-    console.debug(`[${device.host}] responded in ${durationSec.toFixed(2)}s.`);
+    log.debug("HTTP request", {
+      host: device.host,
+      action: "getVersion",
+      ms: Math.round(end - start),
+      ok: result === "ok",
+      result: result === "ok" ? undefined : result,
+    });
   }
 }
 
@@ -103,7 +127,13 @@ export async function sendFile(
   const bodyEnd = Buffer.from(`\r\n--${boundary}--\r\n`);
   const payload = Buffer.concat([bodyStart, fileBuffer, bodyEnd]);
 
-  await fetch(device.uploadUrl, {
+  log.debug("Uploading file", {
+    url: device.uploadUrl,
+    filename,
+    bytes: fileBuffer.length,
+  });
+  const startedAt = performance.now();
+  const response = await fetch(device.uploadUrl, {
     method: "POST",
     headers: {
       Cookie: `sessionId=${device.sessionId}`,
@@ -112,4 +142,20 @@ export async function sendFile(
     },
     body: payload,
   });
+  const ms = Math.round(performance.now() - startedAt);
+  if (response?.ok) {
+    log.debug("File uploaded", {
+      url: device.uploadUrl,
+      filename,
+      ms,
+      status: response?.status,
+    });
+  } else {
+    log.warn("File upload returned HTTP error", {
+      url: device.uploadUrl,
+      filename,
+      ms,
+      status: response?.status,
+    });
+  }
 }
