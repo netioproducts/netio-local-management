@@ -609,3 +609,72 @@ describe("ConfigService – safe writing and recovery", () => {
     expect(DEFAULT_CONFIG).toEqual(snapshot);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ConfigService – settings
+// ---------------------------------------------------------------------------
+describe("ConfigService – settings", () => {
+  let tempDir: string;
+  let configPath: string;
+
+  const writeConfig = (settings: unknown) => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ devices: [], deviceGroups: [], users: [], settings }),
+      "utf-8",
+    );
+  };
+
+  const initService = () => {
+    const svc = createService(tempDir);
+    const warnings: string[] = [];
+    svc.warningBroadcast = (message) => warnings.push(message);
+    svc.init();
+    return { svc, warnings };
+  };
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cfg-settings-test-"));
+    const dataDir = path.join(tempDir, "netio-local-management");
+    fs.mkdirSync(dataDir, { recursive: true });
+    configPath = path.join(dataDir, "config.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("has empty settings by default", () => {
+    const { svc } = initService();
+    expect(svc.getSettings()).toEqual({});
+  });
+
+  it("loads logLevel and keeps it on save", () => {
+    writeConfig({ logLevel: "debug" });
+    const { svc, warnings } = initService();
+
+    expect(svc.getSettings()).toEqual({ logLevel: "debug" });
+    expect(warnings).toHaveLength(0);
+
+    svc.addOrUpdateDevice(SAMPLE_DEVICE);
+    expect(JSON.parse(fs.readFileSync(configPath, "utf-8")).settings).toEqual({
+      logLevel: "debug",
+    });
+  });
+
+  it("drops an invalid logLevel and reports it", () => {
+    writeConfig({ logLevel: "verbose" });
+    const { svc, warnings } = initService();
+
+    expect(svc.getSettings()).toEqual({});
+    expect(warnings[0]).toContain("settings.logLevel");
+  });
+
+  it("reports settings which are not an object", () => {
+    writeConfig("debug");
+    const { svc, warnings } = initService();
+
+    expect(svc.getSettings()).toEqual({});
+    expect(warnings[0]).toContain("settings: Expected an object");
+  });
+});

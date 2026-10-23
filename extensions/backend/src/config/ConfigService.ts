@@ -8,6 +8,7 @@ import {
   Device,
   DeviceGroup,
   AppConfigSchema,
+  Settings,
   User,
   createDefaultConfig,
   parseAppConfig,
@@ -520,6 +521,10 @@ export class ConfigService {
       group.devices = group.devices.filter((mac) => !deviceMacs.includes(mac));
       this.save();
     }
+  }
+
+  public getSettings(): Settings {
+    return this.config.settings ?? {};
   }
 
   public getDeviceGroups(): DeviceGroup[] {

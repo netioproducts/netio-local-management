@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LOG_LEVELS } from "../logging/Logger";
 
 const MACAddressRegex = z
   .string()
@@ -37,17 +38,24 @@ const SocketGroupSchema = z.object({
   ),
 });
 
+// Application settings, every field is optional and validated separately
+const SettingsSchema = z.object({
+  logLevel: z.enum(LOG_LEVELS).optional(),
+});
+
 export const AppConfigSchema = z.object({
   devices: z.array(DeviceSchema),
   deviceGroups: z.array(DeviceGroupSchema),
   // socketGroups: z.array(SocketGroupSchema),
   users: z.array(UserSchema),
+  settings: SettingsSchema.optional(),
 });
 
 export type Device = z.infer<typeof DeviceSchema>;
 export type DeviceGroup = z.infer<typeof DeviceGroupSchema>;
 export type SocketGroup = z.infer<typeof SocketGroupSchema>;
 export type User = z.infer<typeof UserSchema>;
+export type Settings = z.infer<typeof SettingsSchema>;
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 
 // Default configuration
@@ -74,6 +82,7 @@ const RawAppConfigSchema = z.object({
   devices: z.array(z.unknown()),
   deviceGroups: z.array(z.unknown()),
   users: z.array(z.unknown()),
+  settings: z.unknown().optional(),
 });
 
 const RawDeviceGroupSchema = z.object({
@@ -142,5 +151,34 @@ export function parseAppConfig(raw: unknown): ParsedAppConfig {
     ];
   });
 
-  return { config: { devices, deviceGroups, users }, issues };
+  const settings = parseSettings(parsed.settings, issues);
+
+  return {
+    config: { devices, deviceGroups, users, ...(settings && { settings }) },
+    issues,
+  };
+}
+
+/**
+ * Keeps valid settings fields, invalid ones are dropped and reported.
+ */
+function parseSettings(raw: unknown, issues: string[]): Settings | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    issues.push("settings: Expected an object");
+    return undefined;
+  }
+
+  const settings: Settings = {};
+  for (const [key, fieldSchema] of Object.entries(SettingsSchema.shape)) {
+    const value = (raw as Record<string, unknown>)[key];
+    if (value === undefined) continue;
+    const result = fieldSchema.safeParse(value);
+    if (result.success) {
+      (settings as Record<string, unknown>)[key] = result.data;
+    } else {
+      issues.push(...formatIssues(`settings.${key}`, result.error));
+    }
+  }
+  return settings;
 }
