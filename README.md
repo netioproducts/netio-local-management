@@ -143,8 +143,8 @@ bun test
 
 On first launch the app creates a data file in the platform-standard data directory:
 
-| OS      | Path                                                             |
-| ------- | ---------------------------------------------------------------- |
+| OS      | Path                                                               |
+| ------- | ------------------------------------------------------------------ |
 | Linux   | `~/.local/share/netio-local-management/data.json`                |
 | macOS   | `~/Library/Application Support/netio-local-management/data.json` |
 | Windows | `%LOCALAPPDATA%\netio-local-management\data.json`                |
@@ -168,10 +168,10 @@ sent for diagnostics.
 
 ### Log levels
 
-| Level   | Contains                                                                             |
-| ------- | ------------------------------------------------------------------------------------ |
-| `error` | Failed operations with stack traces                                                  |
-| `warn`  | Recoverable problems and failed requests with their reason                           |
+| Level     | Contains                                                                            |
+| --------- | ----------------------------------------------------------------------------------- |
+| `error` | Failed operations with stack traces                                                 |
+| `warn`  | Recoverable problems and failed requests with their reason                          |
 | `info`  | User actions and state changes with results and durations (default)                 |
 | `debug` | Every request to the backend and to devices, WebSocket messages, polling, discovery |
 
@@ -189,6 +189,7 @@ The level is chosen at startup in this order:
      "settings": { "logLevel": "debug" }
    }
    ```
+
    Edit the file while the application is closed. The change takes effect on the next start.
 3. Default `info`.
 

@@ -3,6 +3,7 @@
 // A Node extension engine for Neutralino.
 //
 // (c)2023-2024 Harald Schneider - marketmix.com
+// Changed by Robert Jaros and Claude
 
 const { createLogger } = require('../logging/Logger');
 
